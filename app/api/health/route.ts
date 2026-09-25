@@ -1,0 +1,1 @@
+import {NextResponse} from "next/server"; export async function GET(){return NextResponse.json({ok:true,service:"sayanox-clipforge",timestamp:new Date().toISOString()})}

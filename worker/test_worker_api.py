@@ -1,5 +1,6 @@
 """Worker API tests: auth, validation, rate limiting, job endpoints."""
 import json
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,10 +12,11 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("WORKER_API_TOKEN", "secret-token")
     monkeypatch.setenv("CLIPFORGE_RATE_LIMIT", "100")
     import config
-    monkeypatch.setattr(config, "settings", config.Settings())
+    fresh_settings = config.Settings()
+    monkeypatch.setattr(config, "settings", fresh_settings)
     import main as worker_main
-    monkeypatch.setattr(worker_main, "settings", config.settings)
-    fresh = worker_main.JobStore(config.settings.data_dir, concurrency=1, max_attempts=2)
+    monkeypatch.setattr(worker_main, "settings", fresh_settings)
+    fresh = worker_main.JobStore(fresh_settings.data_dir, concurrency=1, max_attempts=2)
     fresh.register_handler("analyze", worker_main.pipeline.handle_analyze)
     fresh.register_handler("render", worker_main.pipeline.handle_render)
     monkeypatch.setattr(worker_main, "store", fresh)
@@ -22,6 +24,17 @@ def client(tmp_path, monkeypatch):
         c.headers.update({"Authorization": "Bearer secret-token"})
         yield c
     fresh.shutdown()
+
+
+def _wait_status(client, job_id, wanted=("completed", "failed"), timeout=15.0):
+    """Poll the public status endpoint until the job settles."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        body = client.get(f"/jobs/{job_id}").json()
+        if body["status"] in wanted:
+            return body
+        time.sleep(0.05)
+    raise AssertionError(f"job {job_id} did not settle ({wanted}) within {timeout}s")
 
 
 def test_health_is_public(client):

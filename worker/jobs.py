@@ -3,6 +3,10 @@
 JSON-on-disk state (survives restarts), in-memory FIFO queue consumed by a
 background thread pool. Supports progress percentage, retry with attempt
 counter and TTL/size based cleanup of abandoned jobs.
+
+Concurrency contract: every mutation of a job goes through update()/retry()
+which serialise read-modify-write under a single lock, so the worker threads
+and request handlers can never clobber each other's status transitions.
 """
 from __future__ import annotations
 
@@ -26,7 +30,10 @@ class JobStore:
         self.ttl_seconds = float(ttl_hours) * 3600
         self.max_total_bytes = float(max_total_gb) * 1024 ** 3
         self._handlers: dict[str, object] = {}
-        self._lock = threading.Lock()
+        # _lock guards meta read-modify-write cycles AND the requeue decision
+        # in _process, so a concurrent retry()/delete() can never be undone
+        # by a stale in-flight worker.
+        self._lock = threading.RLock()
         self._queue: Queue[str] = Queue()
         self._workers: list[threading.Thread] = []
         self._concurrency = max(1, int(concurrency))
@@ -121,36 +128,49 @@ class JobStore:
                 self._queue.task_done()
 
     def _process(self, job_id: str) -> None:
-        job = self.get(job_id)
-        if not job or job["status"] == "completed":
-            return
-        attempts = int(job.get("attempts", 0)) + 1
-        handler = self._handlers.get(job["kind"])
-        if handler is None:
-            self.update(job_id, status="failed", error=f"No handler for {job['kind']}")
-            return
-        self.update(job_id, status="processing", attempts=attempts, progress=1)
+        with self._lock:
+            job = self.get(job_id)
+            if not job or job["status"] != "queued":
+                return  # deleted, already handled, or a stale duplicate queue entry
+            attempts = int(job.get("attempts", 0)) + 1
+            handler = self._handlers.get(job["kind"])
+            if handler is None:
+                self.update(job_id, status="failed", error=f"No handler for {job['kind']}")
+                return
+            self.update(job_id, status="processing", attempts=attempts, progress=1)
         try:
             result = handler(job, self._dir(job_id), lambda pct: self.set_progress(job_id, pct))
-            self.update(job_id, status="completed", progress=100, result=result, error=None)
         except Exception as e:
-            if attempts < self.max_attempts:
-                self.update(job_id, status="queued", attempts=attempts,
-                            error=f"attempt {attempts} failed: {e}", progress=0)
-                self._queue.put(job_id)
-            else:
-                self.update(job_id, status="failed", error=str(e)[:2000])
+            with self._lock:
+                cur = self.get(job_id)
+                if cur is None:  # job deleted while running — drop the result
+                    return
+                if cur.get("status") != "processing":  # e.g. manual retry re-queued it
+                    return
+                if attempts < self.max_attempts:
+                    self.update(job_id, status="queued", attempts=attempts,
+                                error=f"attempt {attempts} failed: {e}", progress=0)
+                    self._queue.put(job_id)
+                else:
+                    self.update(job_id, status="failed", error=str(e)[:2000])
+            return
+        with self._lock:
+            cur = self.get(job_id)
+            if cur is None or cur.get("status") != "processing":
+                return  # deleted / superseded while the handler ran
+            self.update(job_id, status="completed", progress=100, result=result, error=None)
 
     def retry(self, job_id: str) -> dict | None:
-        job = self.get(job_id)
-        if not job:
-            return None
-        if job["status"] == "processing":
-            return job  # already running
-        self.update(job_id, status="queued", progress=0, error=None, attempts=0)
-        self._queue.put(job_id)
-        self._ensure_workers()
-        return self.get(job_id)
+        with self._lock:
+            job = self.get(job_id)
+            if not job:
+                return None
+            if job["status"] == "processing":
+                return job  # already running; the in-flight worker will settle it
+            self.update(job_id, status="queued", progress=0, error=None, attempts=0)
+            self._queue.put(job_id)
+            self._ensure_workers()
+            return self.get(job_id)
 
     def start(self) -> None:
         """Recover interrupted jobs on boot and spin up workers."""

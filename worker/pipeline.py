@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
 
 import captions
@@ -143,12 +144,31 @@ def handle_render(job: dict, work: Path, progress) -> dict:
     from config import settings
 
     params = _load_params(work)
+    # source may live in the parent analyze job dir (YouTube downloads happen
+    # there); copy it into this render sandbox on demand.
     src = (work / "source.mp4")
     if not src.is_file():
         cands = [p for p in work.glob("source.*") if p.suffix != ".json"]
         if not cands:
-            raise FileNotFoundError("Source media missing — re-create the analyze job.")
-        src = sorted(cands, key=lambda p: p.stat().st_size, reverse=True)[0]
+            parent_id = str(params.get("parent_job") or "")
+            copied = False
+            if parent_id:
+                try:
+                    parent = media.safe_job_dir(settings.data_dir, parent_id)
+                    for f in parent.glob("source.*"):
+                        if f.suffix == ".json":
+                            continue
+                        target = work / f.name
+                        shutil.copy(f, target)
+                        src = target
+                        copied = True
+                        break
+                except (ValueError, OSError):
+                    copied = False
+            if not copied:
+                raise FileNotFoundError("Source media missing — re-create the analyze job.")
+        else:
+            src = sorted(cands, key=lambda p: p.stat().st_size, reverse=True)[0]
     info = media.probe(src)
     duration = info["duration"] or float(params.get("duration", 0))
 

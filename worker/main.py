@@ -30,8 +30,10 @@ from jobs import JobStore
 from schemas import HighlightRequest
 from transcribe import available_engine
 
-VERSION = "0.4.0"
-store = JobStore(settings.data_dir, concurrency=settings.worker_concurrency,
+VERSION = "0.5.0"
+# NOTE: handlers below read `settings` lazily (inside request functions), so
+# tests can monkeypatch config.settings without stale module-level state.
+store = JobStore(Path(settings.data_dir), concurrency=settings.worker_concurrency,
                  max_attempts=settings.max_attempts, ttl_hours=settings.job_ttl_hours,
                  max_total_gb=settings.max_total_storage_gb)
 store.register_handler("analyze", pipeline.handle_analyze)
@@ -173,17 +175,25 @@ async def job_upload(request: Request, video: UploadFile = File(...),
     return {"job_id": job["id"], "status": "queued"}
 
 
-@app.post("/jobs/youtube", dependencies=[Depends(require_token)])
-async def job_youtube(request: Request, payload: dict):
+def _youtube_params(payload: dict) -> dict:
+    """Validate + normalise a YouTube job payload into analyze params."""
     url = str(payload.get("url", "")).strip()
     if not _YT.match(url):
         raise HTTPException(400, "Enter a valid YouTube URL.")
-    params = {
-        "url": url,
-        "min_seconds": float(payload.get("min_seconds", 15)),
-        "max_seconds": float(payload.get("max_seconds", 90)),
-        "limit": int(payload.get("limit", 8)),
-    }
+    try:
+        min_s = float(payload.get("min_seconds", 15))
+        max_s = float(payload.get("max_seconds", 90))
+        limit = int(payload.get("limit", 8))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "min_seconds/max_seconds/limit must be numeric.")
+    if min_s <= 0 or max_s < min_s or not (1 <= limit <= 20):
+        raise HTTPException(400, "Require 0 < min_seconds <= max_seconds and 1 <= limit <= 20.")
+    return {"url": url, "min_seconds": min_s, "max_seconds": max_s, "limit": limit}
+
+
+@app.post("/jobs/youtube", dependencies=[Depends(require_token)])
+async def job_youtube(request: Request, payload: dict):
+    params = _youtube_params(payload)
     job = store.create("analyze", params, client=request.client.host or "")
     work = media.safe_job_dir(settings.data_dir, job["id"])
     (work / "params.json").write_text(json.dumps(params), encoding="utf-8")
@@ -223,6 +233,7 @@ async def job_render(request: Request, payload: dict):
             params["highlights"] = result.get("clips", [])[:len(durations) or 1]
     job = store.create("render", params, client=request.client.host or "")
     work = media.safe_job_dir(settings.data_dir, job["id"])
+    params["parent_job"] = parent_id  # lets the render handler re-locate source files
     # hard-link (fallback copy) the source + transcript so render is sandboxed
     for pat in ("source.*", "transcript.json", "captions.srt"):
         for f in parent.glob(pat):
@@ -246,12 +257,19 @@ def job_status(job_id: str):
     job = store.get(job_id)
     if not job:
         raise HTTPException(404, "Job not found.")
-    return {
+    body = {
         "job_id": job["id"], "kind": job["kind"], "status": job["status"],
         "progress": job["progress"], "attempts": job["attempts"],
         "max_attempts": job["max_attempts"], "error": job["error"],
         "result": job.get("result"),
     }
+    # lightweight status view while a render is running (so the UI can show
+    # per-clip progress without shipping partial binaries)
+    if job["kind"] == "render" and job["status"] == "processing":
+        done = [c.get("file") for c in (job.get("result") or {}).get("clips", [])]
+        if done:
+            body["clips_done"] = done
+    return body
 
 
 @app.get("/jobs/{job_id}/files/{file_path:path}", dependencies=[Depends(require_token)])

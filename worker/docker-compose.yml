@@ -1,0 +1,9 @@
+services:
+  clipforge-worker:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - clipforge-data:/data
+volumes:
+  clipforge-data:

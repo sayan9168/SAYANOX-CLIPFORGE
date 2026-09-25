@@ -31,39 +31,69 @@ from schemas import HighlightRequest
 from transcribe import available_engine
 
 VERSION = "0.5.0"
-# NOTE: handlers below read `settings` lazily (inside request functions), so
-# tests can monkeypatch config.settings without stale module-level state.
-store = JobStore(Path(settings.data_dir), concurrency=settings.worker_concurrency,
-                 max_attempts=settings.max_attempts, ttl_hours=settings.job_ttl_hours,
-                 max_total_gb=settings.max_total_storage_gb)
-store.register_handler("analyze", pipeline.handle_analyze)
-store.register_handler("render", pipeline.handle_render)
+
+
+def build_store(data_dir: Path, concurrency: int, max_attempts: int,
+                ttl_hours: float, max_total_gb: float) -> JobStore:
+    store = JobStore(Path(data_dir), concurrency=concurrency, max_attempts=max_attempts,
+                     ttl_hours=ttl_hours, max_total_storage_gb=max_total_gb)
+    store.register_handler("analyze", pipeline.handle_analyze)
+    store.register_handler("render", pipeline.handle_render)
+    return store
+
+
+# Default production store; tests may swap it via monkeypatch (handlers read
+# `store` lazily at request time, so the swap takes effect immediately).
+store = build_store(settings.data_dir, settings.worker_concurrency,
+                    settings.max_attempts, settings.job_ttl_hours,
+                    settings.max_total_storage_gb)
 
 _YT = re.compile(r"^https?://(www\.)?(youtube\.com|youtu\.be)/[A-Za-z0-9._%\-/?&=#]+$", re.I)
 
 
 # ---------------- security middleware ----------------
 class RateLimit(BaseHTTPMiddleware):
-    """Simple fixed-window per-client-IP limiter for mutating endpoints."""
+    """Simple fixed-window per-client-IP limiter for mutating endpoints.
+
+    All mutable state (hit counters + lock) lives on the innermost ASGI
+    application object, never on this middleware instance: Starlette's
+    TestClient deep-copies the middleware stack for every client, so
+    instance attributes would be duplicated per copy and leak across tests
+    in confusing ways. The app object is shared by every client of the same
+    FastAPI instance, which keeps exactly one true limiter per deployment —
+    and lets tests build a fresh app to reset the window cleanly.
+    """
 
     def __init__(self, app, limit: int = 0, window: float = 60.0):
         super().__init__(app)
         self.static_limit = limit
         self.window = window
-        self.hits: dict[str, deque] = defaultdict(deque)
-        self.lock = threading.Lock()
 
     async def dispatch(self, request: Request, call_next):
         from config import settings as live_settings
         limit = live_settings.rate_limit_per_minute or self.static_limit
-        if limit != getattr(self, "_active_limit", None):
-            self._active_limit = limit
-            self.hits.clear()
+        root = request.app
+        seen = set()
+        while getattr(root, "app", None) is not None and id(root) not in seen:
+            seen.add(id(root))
+            root = root.app
+        hits = getattr(root, "_clipforge_rate_hits", None)
+        if hits is None:
+            hits = defaultdict(deque)
+            setattr(root, "_clipforge_rate_hits", hits)
+        lock = getattr(root, "_clipforge_rate_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            setattr(root, "_clipforge_rate_lock", lock)
+        if getattr(root, "_clipforge_rate_limit", None) != limit:
+            setattr(root, "_clipforge_rate_limit", limit)
+            with lock:
+                hits.clear()
         if request.method in ("POST", "PUT", "DELETE") and limit > 0:
             ip = request.client.host if request.client else "unknown"
             now = time.time()
-            with self.lock:
-                q = self.hits[ip]
+            with lock:
+                q = hits[ip]
                 while q and now - q[0] > self.window:
                     q.popleft()
                 if len(q) >= limit:
@@ -102,8 +132,19 @@ async def lifespan(app: FastAPI):
     store.shutdown()
 
 
-app = FastAPI(title="SAYANOX CLIPFORGE Worker", version=VERSION, lifespan=lifespan)
-app.add_middleware(RateLimit, limit=settings.rate_limit_per_minute)
+def create_app() -> FastAPI:
+    """Build a fully-wired FastAPI instance.
+
+    A fresh instance carries fresh rate-limiter state (the counters live on
+    the app object), which keeps unit tests isolated and makes production
+    startup explicit: `app = create_app()` below.
+    """
+    app = FastAPI(title="SAYANOX CLIPFORGE Worker", version=VERSION, lifespan=lifespan)
+    app.add_middleware(RateLimit, limit=settings.rate_limit_per_minute)
+    return app
+
+
+app = create_app()
 
 
 # ---------------- basic endpoints ----------------

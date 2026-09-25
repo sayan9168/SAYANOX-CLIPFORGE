@@ -2,9 +2,9 @@ import os,subprocess,uuid
 from pathlib import Path
 from fastapi import FastAPI,File,UploadFile,HTTPException
 from fastapi.responses import FileResponse
-from .highlights import Segment,find_highlights
+from highlights import Segment,find_highlights
 
-app=FastAPI(title="SAYANOX CLIPFORGE Worker",version="0.3.0")
+app=FastAPI(title="SAYANOX CLIPFORGE Worker",version="0.3.1")
 ROOT=Path(os.getenv("CLIPFORGE_DATA","/tmp/clipforge")); ROOT.mkdir(parents=True,exist_ok=True)
 
 def ffmpeg(*args:str):
@@ -12,17 +12,16 @@ def ffmpeg(*args:str):
     if p.returncode: raise RuntimeError(p.stderr[-2000:])
 
 @app.get("/health")
-def health(): return {"ok":True,"service":"clipforge-worker","version":"0.3.0"}
+def health(): return {"ok":True,"service":"clipforge-worker","version":"0.3.1"}
 
 @app.post("/highlights")
-async def highlights(video:UploadFile=File(...),segments:str="",min_seconds:float=15,max_seconds:float=60,limit:int=5):
+async def highlights(video:UploadFile=File(...),min_seconds:float=15,max_seconds:float=60,limit:int=5):
     if max_seconds<min_seconds: raise HTTPException(400,"max_seconds must be >= min_seconds")
     if not video.filename: raise HTTPException(400,"Missing filename.")
     job=uuid.uuid4().hex; work=ROOT/job; work.mkdir(); src=work/"source"
     with src.open("wb") as f:
         while chunk:=await video.read(1024*1024): f.write(chunk)
-    # Transcript/vision adapters belong here. Never fabricate transcript data.
-    return {"job_id":job,"status":"uploaded","clips":[],"message":"Media accepted. Supply timestamped transcript segments to the scoring adapter."}
+    return {"job_id":job,"status":"uploaded","clips":[],"message":"Media accepted. Transcript adapter is required before highlight generation."}
 
 @app.post("/score")
 async def score_segments(payload:dict):

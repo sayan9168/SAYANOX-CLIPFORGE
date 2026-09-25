@@ -1,14 +1,17 @@
 # ClipForge Processing Worker
 
-The web app is intentionally separated from heavy media processing.
+A separate FastAPI + FFmpeg worker for authorized video files.
 
-Recommended worker pipeline:
-1. Validate that the requester is authorized to process the source.
-2. Resolve an allowed source through the platform/provider's permitted mechanism.
-3. Extract audio/transcript with a locally hosted speech-to-text model.
-4. Detect scene, speech, silence and audio peaks.
-5. Score candidate windows.
-6. Cut/transcode with FFmpeg.
-7. Store temporary artifacts and return clip metadata.
+## Run
 
-Do not bypass access controls, DRM, private videos, or platform restrictions.
+```bash
+docker compose up --build
+```
+
+Health: `GET /health`
+
+Create a clip by multipart uploading an authorized video to `POST /clip` with:
+- `start`: start time in seconds
+- `end`: end time in seconds
+
+The worker intentionally accepts uploaded files rather than scraping or bypassing access controls on third-party platforms. Add transcript/highlight analysis only for media you are authorized to process.

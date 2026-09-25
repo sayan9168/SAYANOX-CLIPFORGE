@@ -1,0 +1,5 @@
+# Heavy production extras for the ClipForge worker.
+# Install on top of requirements.txt in GPU/CPU inference images:
+#   pip install -r requirements.txt -r requirements-ml.txt
+faster-whisper==1.1.1
+yt-dlp==2025.6.9

@@ -2,4 +2,9 @@ fastapi==0.115.6
 uvicorn[standard]==0.34.0
 python-multipart==0.0.20
 pydantic==2.10.4
+httpx==0.28.1
 pytest==8.3.4
+# --- real transcription (heavy; commented out so lightweight CI stays fast).
+# Uncomment in production images or pass an extra -r requirements-ml.txt:
+# faster-whisper==1.1.1
+# yt-dlp==2025.6.9

@@ -2,6 +2,7 @@
 import { useRef, useState } from "react";
 import { Play } from "lucide-react";
 import { SocialCaption } from "./SocialCaption";
+import { WaveformTimeline } from "./WaveformTimeline";
 
 export type Highlight = {
   start: number; end: number; score: number;
@@ -42,6 +43,11 @@ export function ClipPicker({
   const [open, setOpen] = useState<number | null>(null);
   const vids = useRef<Record<number, HTMLVideoElement | null>>({});
   const previewJob = jobId || lastAnalyzeJob();
+  const marks = clips.map((c, i) => ({
+    start: trims[i]?.start ?? c.start,
+    end: trims[i]?.end ?? c.end,
+  }));
+  const span = marks.reduce((m, x) => Math.max(m, x.end), 1);
 
   function toggle(i: number) {
     const next = selected.slice();
@@ -66,14 +72,15 @@ export function ClipPicker({
   }
   return (
     <>
+      <WaveformTimeline jobId={previewJob} duration={span} marks={marks} />
       {clips.map((c, i) => {
         const t0 = trims[i]?.start ?? c.start;
         const t1 = trims[i]?.end ?? c.end;
         const rail0 = Math.max(0, Math.min(c.start, t0) - 8);
         const rail1 = Math.max(c.end, t1) + 8;
-        const span = Math.max(1, rail1 - rail0);
-        const left = ((t0 - rail0) / span) * 100;
-        const width = ((t1 - t0) / span) * 100;
+        const railSpan = Math.max(1, rail1 - rail0);
+        const left = ((t0 - rail0) / railSpan) * 100;
+        const width = ((t1 - t0) / railSpan) * 100;
         return (
           <article className={`clip${selected[i] === false ? " dim" : ""}`} key={i}>
             <div className="thumb">
@@ -107,9 +114,7 @@ export function ClipPicker({
               </div>
               {previewJob && (
                 <div className="previewBox">
-                  <button type="button" className="chip" disabled={busy} onClick={() => playPreview(i)}>
-                    Preview trim
-                  </button>
+                  <button type="button" className="chip" disabled={busy} onClick={() => playPreview(i)}>Preview trim</button>
                   {open === i && (
                     <video
                       ref={(el) => { vids.current[i] = el; }}

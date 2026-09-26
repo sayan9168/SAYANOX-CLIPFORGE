@@ -55,23 +55,35 @@ class JobStore:
 
     def _write(self, job: dict) -> None:
         job["updated_at"] = time.time()
-        self._meta_path(job["id"]).write_text(json.dumps(job), encoding="utf-8")
+        path = self._meta_path(job["id"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(job), encoding="utf-8")
+        tmp.replace(path)
 
     def get(self, job_id: str) -> dict | None:
         p = self._meta_path(job_id)
         if not p.is_file():
             return None
-        try:
-            return json.loads(p.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            return None
+        for _ in range(5):
+            try:
+                return json.loads(p.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                time.sleep(0.01)
+            except OSError:
+                return None
+        return None
 
     def update(self, job_id: str, **fields) -> dict | None:
         with self._lock:
             job = self.get(job_id)
-            if not job:
+            if not job or job.get("status") == "deleted":
+                return None
+            if not self._dir(job_id).is_dir():
                 return None
             job.update(fields)
+            if job.get("status") == "deleted":
+                return None
             self._write(job)
             return job
 
@@ -193,11 +205,20 @@ class JobStore:
         return sum(f.stat().st_size for f in self.root.rglob("*") if f.is_file())
 
     def delete(self, job_id: str) -> bool:
-        d = self._dir(job_id)
-        if d.is_dir():
+        with self._lock:
+            d = self._dir(job_id)
+            if not d.is_dir():
+                return False
+            meta = self._meta_path(job_id)
+            if meta.is_file():
+                try:
+                    job = json.loads(meta.read_text(encoding="utf-8"))
+                    job["status"] = "deleted"
+                    meta.write_text(json.dumps(job), encoding="utf-8")
+                except Exception:
+                    pass
             shutil.rmtree(d, ignore_errors=True)
             return True
-        return False
 
     def cleanup(self) -> dict:
         removed, now = [], time.time()

@@ -26,7 +26,7 @@ jobs:
       - name: Pytest unit suite
         run: |
           cd worker
-          PYTHONPATH=. python -m pytest test_highlights.py test_jobs.py test_captions.py test_social.py -q
+          PYTHONPATH=. python -m pytest test_highlights.py test_jobs.py test_captions.py test_social.py test_webhook.py -q
       - name: Import worker
         run: |
           PYTHONPATH=worker python -c "import main; assert main.VERSION; print('worker', main.VERSION)"

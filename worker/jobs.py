@@ -1,13 +1,4 @@
-"""Persistent job system: queued / processing / completed / failed.
-
-JSON-on-disk state (survives restarts), in-memory FIFO queue consumed by a
-background thread pool. Supports progress percentage, retry with attempt
-counter and TTL/size based cleanup of abandoned jobs.
-
-Concurrency contract: every mutation of a job goes through update()/retry()
-which serialise read-modify-write under a single lock, so the worker threads
-and request handlers can never clobber each other's status transitions.
-"""
+"""Persistent job system: queued / processing / completed / failed."""
 from __future__ import annotations
 
 import json
@@ -30,16 +21,12 @@ class JobStore:
         self.ttl_seconds = float(ttl_hours) * 3600
         self.max_total_bytes = float(max_total_gb) * 1024 ** 3
         self._handlers: dict[str, object] = {}
-        # _lock guards meta read-modify-write cycles AND the requeue decision
-        # in _process, so a concurrent retry()/delete() can never be undone
-        # by a stale in-flight worker.
         self._lock = threading.RLock()
         self._queue: Queue[str] = Queue()
         self._workers: list[threading.Thread] = []
         self._concurrency = max(1, int(concurrency))
         self._stop = threading.Event()
 
-    # ---------- persistence ----------
     def _dir(self, job_id: str) -> Path:
         return self.root / job_id
 
@@ -47,7 +34,6 @@ class JobStore:
         return self._dir(job_id) / "job.json"
 
     def register_handler(self, kind: str, fn) -> None:
-        """fn(job: dict, workdir: Path, progress) -> result dict"""
         self._handlers[kind] = fn
 
     def create(self, kind: str, params: dict, client: str = "") -> dict:
@@ -103,7 +89,6 @@ class JobStore:
                 break
         return jobs
 
-    # ---------- queue / workers ----------
     def _ensure_workers(self) -> None:
         with self._lock:
             alive = [w for w in self._workers if w.is_alive()]
@@ -122,16 +107,25 @@ class JobStore:
                 continue
             try:
                 self._process(job_id)
-            except Exception as e:  # defensive: never kill the loop
+            except Exception as e:
                 self.update(job_id, status="failed", error=f"worker crash: {e}", progress=0)
             finally:
                 self._queue.task_done()
+
+    def _notify(self, job: dict | None) -> None:
+        if not job:
+            return
+        try:
+            from webhook import notify
+            notify(job)
+        except Exception:
+            pass
 
     def _process(self, job_id: str) -> None:
         with self._lock:
             job = self.get(job_id)
             if not job or job["status"] != "queued":
-                return  # deleted, already handled, or a stale duplicate queue entry
+                return
             attempts = int(job.get("attempts", 0)) + 1
             handler = self._handlers.get(job["kind"])
             if handler is None:
@@ -143,22 +137,22 @@ class JobStore:
         except Exception as e:
             with self._lock:
                 cur = self.get(job_id)
-                if cur is None:  # job deleted while running — drop the result
-                    return
-                if cur.get("status") != "processing":  # e.g. manual retry re-queued it
+                if cur is None or cur.get("status") != "processing":
                     return
                 if attempts < self.max_attempts:
                     self.update(job_id, status="queued", attempts=attempts,
                                 error=f"attempt {attempts} failed: {e}", progress=0)
                     self._queue.put(job_id)
                 else:
-                    self.update(job_id, status="failed", error=str(e)[:2000])
+                    failed = self.update(job_id, status="failed", error=str(e)[:2000])
+                    self._notify(failed)
             return
         with self._lock:
             cur = self.get(job_id)
             if cur is None or cur.get("status") != "processing":
-                return  # deleted / superseded while the handler ran
-            self.update(job_id, status="completed", progress=100, result=result, error=None)
+                return
+            done = self.update(job_id, status="completed", progress=100, result=result, error=None)
+            self._notify(done)
 
     def retry(self, job_id: str) -> dict | None:
         with self._lock:
@@ -166,14 +160,18 @@ class JobStore:
             if not job:
                 return None
             if job["status"] == "processing":
-                return job  # already running; the in-flight worker will settle it
+                return job
             self.update(job_id, status="queued", progress=0, error=None, attempts=0)
             self._queue.put(job_id)
             self._ensure_workers()
             return self.get(job_id)
 
     def start(self) -> None:
-        """Recover interrupted jobs on boot and spin up workers."""
+        try:
+            from addon import mount
+            mount()
+        except Exception:
+            pass
         for meta in self.root.glob("*/job.json"):
             try:
                 job = json.loads(meta.read_text(encoding="utf-8"))
@@ -187,7 +185,6 @@ class JobStore:
     def shutdown(self) -> None:
         self._stop.set()
 
-    # ---------- storage management ----------
     def dir_size(self, job_id: str) -> int:
         d = self._dir(job_id)
         return sum(f.stat().st_size for f in d.rglob("*") if f.is_file()) if d.is_dir() else 0
@@ -203,7 +200,6 @@ class JobStore:
         return False
 
     def cleanup(self) -> dict:
-        """Remove jobs older than TTL and trim to the global size budget."""
         removed, now = [], time.time()
         for meta in self.root.glob("*/job.json"):
             try:
@@ -216,7 +212,6 @@ class JobStore:
             if age > self.ttl_seconds or abandoned:
                 shutil.rmtree(meta.parent, ignore_errors=True)
                 removed.append(job.get("id", meta.parent.name))
-        # enforce size budget (oldest first)
         while self.total_size() > self.max_total_bytes:
             dirs = sorted((d for d in self.root.iterdir() if d.is_dir()),
                           key=lambda d: d.stat().st_mtime)

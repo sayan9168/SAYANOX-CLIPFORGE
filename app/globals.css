@@ -249,4 +249,5 @@ footer{
 }
 .socialCap{margin-top:10px;background:#10140c;border:1px solid #2a3520;border-radius:10px;padding:10px 12px;text-align:left}
 .socialHead{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;font-size:11px;color:#a3b07a;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+.socialTabs{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 8px}
 .socialCap pre{margin:0;white-space:pre-wrap;color:#e8f0d8;font-size:12px;line-height:1.45;font-family:ui-sans-serif,system-ui,sans-serif}

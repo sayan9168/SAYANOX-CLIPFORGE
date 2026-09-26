@@ -1,0 +1,11 @@
+.timeline{margin:8px 0}
+.rail{height:8px;background:#161a12;border-radius:99px;position:relative;overflow:hidden;border:1px solid #2a3520}
+.rail i{position:absolute;top:0;bottom:0;background:var(--accent);border-radius:99px;opacity:.85}
+.trimRow{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:8px;font-size:12px;color:var(--muted)}
+.trimRow input[type=number]{width:72px;background:#0a0c10;border:1px solid var(--line);border-radius:8px;color:var(--text);padding:4px 6px}
+.trimRow input[type=range]{width:120px}
+.previewBox{margin-top:8px}
+.previewBox video{width:100%;max-height:220px;margin-top:8px;border-radius:10px;background:#000}
+.clip.dim{opacity:.45}
+.pickLabel{display:flex;align-items:center;gap:8px;cursor:pointer}
+.pickLabel h3{margin:0}

@@ -260,6 +260,12 @@ async def job_youtube(request: Request, payload: dict):
     work = media.safe_job_dir(_data_root(), job["id"])
     work.mkdir(parents=True, exist_ok=True)
     (work / "params.json").write_text(json.dumps(params), encoding="utf-8")
+    # Batch mode (feature B1#3): a single URL that expands to many videos
+    # (playlist/watch?v=...&list=...) may pass `batch: true` — the analyze
+    # handler then enumerates and queues one child job per entry.
+    if payload.get("batch"):
+        job["params"]["batch"] = True
+        (work / "job.json").write_text(json.dumps(job), encoding="utf-8")
     return {
         "job_id": job["id"],
         "status": "queued",
@@ -270,18 +276,21 @@ async def job_youtube(request: Request, payload: dict):
 
 @app.post("/jobs/render", dependencies=[Depends(require_token)])
 async def job_render(request: Request, payload: dict):
-    parent_id = str(payload.get("parent_job", ""))
-    try:
-        parent = media.safe_job_dir(_data_root(), parent_id) if parent_id else None
-    except ValueError:
-        raise HTTPException(400, "Invalid parent job id.")
-    if not parent or not parent.is_dir():
-        raise HTTPException(404, "Parent analyze job not found.")
     highlights = payload.get("highlights") or []
-    durations = [int(d) for d in payload.get("durations", settings.clip_durations)]
-    bad = [d for d in durations if d not in settings.clip_durations]
+    raw_durations = payload.get("durations", settings.clip_durations)
+    try:
+        durations = [int(d) for d in raw_durations]
+    except (TypeError, ValueError):
+        raise HTTPException(400, "durations must be numeric seconds.")
+    # Custom lengths are allowed (UI min/max seconds, feature B1#14); the
+    # legacy preset chips (15/30/60/90) remain the default. Anything outside
+    # a sane range is rejected instead of silently clamped. Duration
+    # validation runs BEFORE the parent lookup so bad input always answers 400.
+    bad = [d for d in durations if not (5 <= d <= 600)]
     if bad:
-        raise HTTPException(400, f"Durations must be from {list(settings.clip_durations)}")
+        raise HTTPException(400, "Durations must be between 5 and 600 seconds.")
+    if not durations:
+        durations = [max(settings.clip_durations[0], 15)]
     style = str(payload.get("caption_style", "default"))
     if style not in ("default", "karaoke", "clean", "bold"):
         raise HTTPException(400, "caption_style must be default|karaoke|clean|bold")
@@ -289,6 +298,13 @@ async def job_render(request: Request, payload: dict):
     if aspect not in ("9:16", "1:1", "16:9"):
         aspect = "9:16"
     vertical = aspect == "9:16"
+    parent_id = str(payload.get("parent_job", ""))
+    try:
+        parent = media.safe_job_dir(_data_root(), parent_id) if parent_id else None
+    except ValueError:
+        raise HTTPException(400, "Invalid parent job id.")
+    if not parent or not parent.is_dir():
+        raise HTTPException(404, "Parent analyze job not found.")
     params = {
         "highlights": highlights,
         "durations": durations,
@@ -390,6 +406,40 @@ def job_delete(job_id: str):
     if not store.delete(job_id):
         raise HTTPException(404, "Job not found.")
     return {"deleted": job_id}
+
+
+@app.get("/jobs/{job_id}/zip", dependencies=[Depends(require_token)])
+def job_zip(job_id: str):
+    """Stream every rendered clip of a render job as one download.zip."""
+    try:
+        work = media.safe_job_dir(_data_root(), job_id)
+    except ValueError:
+        raise HTTPException(400, "Invalid job id.")
+    job = store.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found.")
+    clips_dir = work / "clips"
+    files = sorted(p for p in clips_dir.glob("*.mp4") if p.is_file()) \
+        if clips_dir.is_dir() else []
+    if not files:
+        raise HTTPException(404, "No rendered clips to bundle yet.")
+
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for f in files:
+            zf.write(f, arcname=f.name)
+    buf.seek(0)
+    from fastapi.responses import StreamingResponse
+
+    filename = f"clipforge-{job_id}-clips.zip"
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.post("/jobs/cleanup", dependencies=[Depends(require_token)])

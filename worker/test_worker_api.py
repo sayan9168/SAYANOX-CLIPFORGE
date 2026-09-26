@@ -162,3 +162,68 @@ def test_caption_style_bold_accepted_in_render_validation(client):
     )
     # parent missing -> 404 (not 400 from style rejection)
     assert r.status_code == 404
+
+
+def test_zip_download_bundle(client, tmp_path):
+    """GET /jobs/{id}/zip bundles every rendered clip of a job."""
+    import io
+    import json
+    import time
+    import zipfile
+
+    import main as worker_main
+
+    # Build the sandbox + metadata directly (no queue race with earlier
+    # tests' background workers that may fail+requeue this job mid-assert).
+    job = worker_main.store.create("render", {"durations": [30]})
+    job_id = job["id"]
+    work = worker_main.media.safe_job_dir(worker_main._data_root(), job_id)
+    clips = work / "clips"
+    clips.mkdir(parents=True, exist_ok=True)
+    (clips / "clip-01-vertical.mp4").write_bytes(b"fake-mp4-one")
+    (clips / "clip-02-vertical.mp4").write_bytes(b"fake-mp4-two")
+    # mark the job completed so the bundle is considered ready
+    meta_path = work / "job.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta["status"] = "completed"
+    meta["updated_at"] = time.time()
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+
+    z = client.get(f"/jobs/{job_id}/zip")
+    assert z.status_code == 200
+    assert z.headers["content-type"] == "application/zip"
+    assert "attachment" in z.headers.get("content-disposition", "")
+    archive = zipfile.ZipFile(io.BytesIO(z.content))
+    names = sorted(archive.namelist())
+    assert names == ["clip-01-vertical.mp4", "clip-02-vertical.mp4"]
+    assert archive.read("clip-01-vertical.mp4") == b"fake-mp4-one"
+
+
+def test_zip_missing_for_job_without_clips(client):
+    r = client.post("/jobs/youtube", json={"url": "https://youtu.be/nozip"})
+    job_id = r.json()["job_id"]
+    assert client.get(f"/jobs/{job_id}/zip").status_code == 404
+    assert client.get("/jobs/bad..id/zip").status_code in (400, 404)
+
+
+def test_render_accepts_custom_durations(client):
+    """Custom target lengths (UI min/max seconds) pass validation; only the
+    missing-parent lookup should fail with 404 — never a duration 400."""
+    ok = client.post(
+        "/jobs/render",
+        json={
+            "parent_job": "nonexistent0002",
+            "highlights": [{"start": 0, "end": 22}],
+            "durations": [22, 45],
+        },
+    )
+    assert ok.status_code == 404  # parent not found, durations accepted
+    bad = client.post(
+        "/jobs/render",
+        json={
+            "parent_job": "nonexistent0002",
+            "highlights": [{"start": 0, "end": 22}],
+            "durations": [3],
+        },
+    )
+    assert bad.status_code == 400

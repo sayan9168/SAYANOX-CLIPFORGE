@@ -1,5 +1,4 @@
 """Worker API tests: auth, validation, rate limiting, job endpoints."""
-import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -7,11 +6,11 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
+    """Isolated worker app bound to a temp data dir + auth token."""
     monkeypatch.setenv("CLIPFORGE_DATA", str(tmp_path / "data"))
     monkeypatch.setenv("WORKER_API_TOKEN", "secret-token")
     monkeypatch.setenv("CLIPFORGE_RATE_LIMIT", "100")
-    # Rebuild settings + store against the temp data dir so tests never
-    # touch the default /tmp/clipforge path or share rate-limit state.
+
     import config
 
     fresh_settings = config.Settings()
@@ -21,6 +20,9 @@ def client(tmp_path, monkeypatch):
     from jobs import JobStore
 
     monkeypatch.setattr(worker_main, "settings", fresh_settings)
+
+    # Routes are registered on the module-level `app` object, so we keep
+    # that app and only swap the JobStore + settings underneath it.
     fresh = JobStore(
         fresh_settings.data_dir,
         concurrency=1,
@@ -32,9 +34,16 @@ def client(tmp_path, monkeypatch):
     fresh.register_handler("render", worker_main.pipeline.handle_render)
     monkeypatch.setattr(worker_main, "store", fresh)
 
-    # Fresh app so RateLimit middleware state is isolated
-    app = worker_main.create_app()
-    with TestClient(app) as c:
+    # Reset rate-limit state on the shared ASGI app object
+    root = worker_main.app
+    seen = set()
+    while getattr(root, "app", None) is not None and id(root) not in seen:
+        seen.add(id(root))
+        root = root.app
+    if hasattr(root, "_clipforge_rate_hits"):
+        root._clipforge_rate_hits.clear()
+
+    with TestClient(worker_main.app) as c:
         c.headers.update({"Authorization": "Bearer secret-token"})
         yield c
     fresh.shutdown()
@@ -50,9 +59,10 @@ def test_health_is_public(client):
 
 
 def test_auth_required(client):
-    c = TestClient(client.app)
-    assert c.get("/jobs/deadbeef").status_code == 401
-    assert c.post("/jobs/youtube", json={"url": "https://youtu.be/x"}).status_code == 401
+    # New client without Authorization header
+    bare = TestClient(client.app)
+    assert bare.get("/jobs/deadbeef").status_code == 401
+    assert bare.post("/jobs/youtube", json={"url": "https://youtu.be/x"}).status_code == 401
 
 
 def test_youtube_job_validation(client):

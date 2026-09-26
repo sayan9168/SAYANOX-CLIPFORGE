@@ -30,7 +30,7 @@ from jobs import JobStore
 from schemas import HighlightRequest
 from transcribe import available_engine
 
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 
 
 def build_store(data_dir: Path, concurrency: int, max_attempts: int,
@@ -258,11 +258,16 @@ async def job_render(request: Request, payload: dict):
     if bad:
         raise HTTPException(400, f"Durations must be from {list(settings.clip_durations)}")
     style = str(payload.get("caption_style", "default"))
-    if style not in ("default", "karaoke", "clean"):
-        raise HTTPException(400, "caption_style must be default|karaoke|clean")
+    if style not in ("default", "karaoke", "clean", "bold"):
+        raise HTTPException(400, "caption_style must be default|karaoke|clean|bold")
+    aspect = str(payload.get("aspect", "9:16"))
+    if aspect not in ("9:16", "1:1", "16:9"):
+        aspect = "9:16"
+    vertical = aspect == "9:16"
     params = {
         "highlights": highlights, "durations": durations,
-        "vertical": bool(payload.get("vertical", True)),
+        "vertical": vertical,
+        "aspect": aspect,
         "captions": bool(payload.get("captions", True)),
         "caption_style": style,
         "padding": float(payload.get("padding", settings.padding_seconds)),

@@ -9,3 +9,6 @@
 .clip.dim{opacity:.45}
 .pickLabel{display:flex;align-items:center;gap:8px;cursor:pointer}
 .pickLabel h3{margin:0}
+.waveWrap{margin:12px 0 4px;color:#8fbf3c}
+.wave{width:100%;height:64px;background:#0c1008;border:1px solid #2a3520;border-radius:10px}
+.waveWrap small{display:block;color:#6b7280;font-size:11px;margin-top:4px}

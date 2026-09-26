@@ -1,14 +1,21 @@
 # SAYANOX CLIPFORGE
 
-No demo mode. Worker required (`WORKER_API_URL=http://127.0.0.1:8000`).
+No demo mode. Worker required.
 
-## Added this pass
+## New pages
 
-- Visual in/out timeline sliders on each highlight
-- Source preview of the trimmed window (`Preview trim`)
-- Render flags `grade` (contrast/sat) and `hook_zoom` (10% punch-in)
-- Toolbar chips Grade / Hook zoom when the page passes setters
+- `/jobs` — live worker job list
+- `/projects` — saved projects on the worker volume
 
-## Still not in-app (need your platform keys)
+## Worker extras (after boot)
 
-YouTube / Instagram / TikTok auto-publish, OAuth accounts, scheduled posts.
+- `GET /jobs` job list
+- `GET|POST /projects`
+- `POST /translate` (LibreTranslate if `CLIPFORGE_TRANSLATE_URL` is set)
+- `GET /stock-bgm` generated royalty-free sine beds (`soft` / `warm` / `pulse`)
+- Drop `intro.mp4` / `outro.mp4` in the job folder or `data/bumpers/`
+- Webhook: `CLIPFORGE_WEBHOOK_URL` on complete/fail (`worker/test_webhook.py`)
+
+## Deploy
+
+See [DEPLOY.md](DEPLOY.md) for Vercel web + GPU Whisper worker.

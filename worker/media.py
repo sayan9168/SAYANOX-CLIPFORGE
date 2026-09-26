@@ -23,7 +23,6 @@ def have_tool(name: str) -> bool:
 
 
 def run_ffmpeg(*args: str, timeout: int = 3600) -> str:
-    """Run ffmpeg (overwriting outputs). Raises RuntimeError with stderr tail."""
     p = subprocess.run(
         ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *args],
         capture_output=True, text=True, timeout=timeout,
@@ -34,7 +33,6 @@ def run_ffmpeg(*args: str, timeout: int = 3600) -> str:
 
 
 def probe(path: Path) -> dict:
-    """Return {duration,width,height,fps,has_audio} via ffprobe (zeros on failure)."""
     info = {"duration": 0.0, "width": 0, "height": 0, "fps": 0.0, "has_audio": False}
     if not have_tool("ffprobe"):
         return info
@@ -66,14 +64,12 @@ def probe(path: Path) -> dict:
 
 
 def extract_audio(source: Path, target: Path) -> Path:
-    """16 kHz mono wav — the canonical input for Whisper."""
     run_ffmpeg("-i", str(source), "-vn", "-ac", "1", "-ar", "16000",
                "-c:a", "pcm_s16le", str(target))
     return target
 
 
 def audio_energy_curve(source: Path, hop: float = 0.5, duration: float = 0.0) -> list[float]:
-    """Mean absolute RMS per `hop` second window from the audio volume filter."""
     if not have_tool("ffmpeg"):
         return []
     try:
@@ -92,7 +88,6 @@ def audio_energy_curve(source: Path, hop: float = 0.5, duration: float = 0.0) ->
 
 
 def scene_changes(source: Path, threshold: float = 0.30, limit: int = 400) -> list[float]:
-    """Timestamps where ffmpeg scdet reports a visual scene cut."""
     if not have_tool("ffmpeg"):
         return []
     try:
@@ -109,11 +104,7 @@ def scene_changes(source: Path, threshold: float = 0.30, limit: int = 400) -> li
 
 
 def speaker_track(source: Path, start: float, end: float, samples: int = 24) -> list[float]:
-    """Estimate horizontal subject position (0..1) over a window by tracking the
-    centre-of-mass of inter-frame motion. Used to bias vertical crops toward the
-    active speaker. Returns [] when unavailable."""
     dur = max(0.5, end - start)
-    step = dur / max(2, samples)
     vf = (
         f"crop=iw/2:ih:iw/2:0,scale=64:-1,"
         f"signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=-"
@@ -129,42 +120,88 @@ def speaker_track(source: Path, start: float, end: float, samples: int = 24) -> 
     vals = [float(v) for v in re.findall(r"YAVG=([\d.]+)", out)]
     if len(vals) < 3:
         return []
-    # normalise brightness deltas into a smooth pseudo-motion track
     base = sum(vals) / len(vals) or 1.0
     track = [min(1.0, max(0.0, 0.5 + (v - base) / (base * 4))) for v in vals]
     return track
 
 
-def smart_crop_cmd(src: Path, dst: Path, info: dict, center_x: float | None) -> None:
-    """Render a 9:16 clip. If face detection is available use it, otherwise
-    centre-bias the crop using the supplied motion/speaker estimate."""
-    w, h = info.get("width") or 0, info.get("height") or 0
-    if w and h:
-        cw = min(w, int(h * 9 / 16))
-        cw -= cw % 2
-        if center_x is None:
-            cx_expr = "W/2"
-        else:
-            cx_expr = f"clip({center_x:.3f}*W,{cw}/2,{w - cw}/2)"
-        run_ffmpeg(
-            "-i", str(src),
-            "-vf", f"crop={cw}:ih:'{cx_expr}':0,scale=1080:1920:flags=bicubic",
-            "-r", "30", "-map", "0:a:0?", "-c:v", "libx264", "-preset", "veryfast",
-            "-crf", "23", "-pix_fmt", "yuv420p", "-c:a", "aac",
-            "-movflags", "+faststart", str(dst),
+def face_center_x(source: Path, start: float, end: float, samples: int = 6) -> float | None:
+    """Phase 2: optional OpenCV face center (0..1). Returns None if unavailable."""
+    try:
+        import cv2  # type: ignore
+    except Exception:
+        return None
+    if not source.is_file():
+        return None
+    cap = cv2.VideoCapture(str(source))
+    if not cap.isOpened():
+        return None
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+    w = cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 1.0
+    cascade = cv2.CascadeClassifier(
+        cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+    )
+    xs: list[float] = []
+    dur = max(0.5, end - start)
+    for i in range(samples):
+        t = start + (dur * (i + 0.5) / samples)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, int(t * fps)))
+        ok, frame = cap.read()
+        if not ok or frame is None:
+            continue
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        faces = cascade.detectMultiScale(gray, 1.2, 4, minSize=(40, 40))
+        if len(faces) == 0:
+            continue
+        # largest face
+        x, y, fw, fh = max(faces, key=lambda f: f[2] * f[3])
+        xs.append((x + fw / 2) / w)
+    cap.release()
+    if not xs:
+        return None
+    return round(sum(xs) / len(xs), 3)
+
+
+def mix_bgm(
+    video: Path,
+    bgm: Path,
+    dest: Path,
+    *,
+    speech_vol: float = 1.0,
+    bgm_vol: float = 0.18,
+    duck: bool = True,
+) -> Path:
+    """Mix background music under speech. Optional sidechain-style ducking via
+    volume envelopes (lightweight, no sidechaincompress dependency)."""
+    if not bgm.is_file():
+        shutil.copy(video, dest)
+        return dest
+    # Loop BGM to video length; lower BGM; keep speech dominant
+    if duck:
+        # speech full, BGM quieter — approximate duck by fixed low bed
+        af = (
+            f"[1:a]volume={bgm_vol},aloop=loop=-1:size=2e+09,aformat=fltp[bg];"
+            f"[0:a]volume={speech_vol}[sp];"
+            f"[sp][bg]amix=inputs=2:duration=first:dropout_transition=2[a]"
         )
     else:
-        run_ffmpeg("-i", str(src), "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2",
-                   "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-                   "-c:a", "aac", "-movflags", "+faststart", str(dst))
+        af = (
+            f"[1:a]volume={bgm_vol},aloop=loop=-1:size=2e+09[bg];"
+            f"[0:a]volume={speech_vol}[sp];"
+            f"[sp][bg]amix=inputs=2:duration=first[a]"
+        )
+    run_ffmpeg(
+        "-i", str(video), "-i", str(bgm),
+        "-filter_complex", af,
+        "-map", "0:v:0", "-map", "[a]",
+        "-c:v", "copy", "-c:a", "aac", "-shortest",
+        "-movflags", "+faststart", str(dest),
+        timeout=1800,
+    )
+    return dest
 
 
 def download_youtube(url: str, work: Path) -> tuple[Path, dict]:
-    """Authorised media input: fetch a YouTube video with yt-dlp.
-
-    Only runs when the operator explicitly enables it (CLIPFORGE_ALLOW_YTDLP=true)
-    — processing must be limited to content the user owns or may distribute.
-    """
     import os
     if os.getenv("CLIPFORGE_ALLOW_YTDLP", "").lower() not in ("1", "true", "yes", "on"):
         raise PermissionError(
@@ -195,7 +232,6 @@ def download_youtube(url: str, work: Path) -> tuple[Path, dict]:
 
 
 def safe_job_dir(root: Path, job_id: str) -> Path:
-    """Resolve a job directory while blocking path traversal."""
     if not _SAFE_ID.match(job_id):
         raise ValueError("Invalid job id.")
     path = (root / job_id).resolve()

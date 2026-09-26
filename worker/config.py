@@ -23,23 +23,19 @@ def _env(name: str, default):
 class Settings:
     data_dir: Path = field(default_factory=lambda: Path(os.getenv("CLIPFORGE_DATA", "/tmp/clipforge")))
     api_token: str = field(default_factory=lambda: _env("WORKER_API_TOKEN", ""))
-    # storage / upload limits
     max_upload_mb: int = field(default_factory=lambda: _env("CLIPFORGE_MAX_UPLOAD_MB", 2048))
     job_ttl_hours: float = field(default_factory=lambda: _env("CLIPFORGE_JOB_TTL_HOURS", 24.0))
     max_total_storage_gb: float = field(default_factory=lambda: _env("CLIPFORGE_MAX_STORAGE_GB", 50.0))
-    # rate limiting (per client ip)
     rate_limit_per_minute: int = field(default_factory=lambda: _env("CLIPFORGE_RATE_LIMIT", 30))
-    # transcription
     whisper_model: str = field(default_factory=lambda: _env("WHISPER_MODEL", "base"))
     whisper_device: str = field(default_factory=lambda: _env("WHISPER_DEVICE", "cpu"))
     whisper_compute: str = field(default_factory=lambda: _env("WHISPER_COMPUTE_TYPE", "int8"))
     allow_faster_whisper: bool = field(default_factory=lambda: _env("CLIPFORGE_ALLOW_FASTER_WHISPER", True))
-    # queue
     worker_concurrency: int = field(default_factory=lambda: _env("CLIPFORGE_WORKER_CONCURRENCY", 1))
     max_attempts: int = field(default_factory=lambda: _env("CLIPFORGE_MAX_ATTEMPTS", 3))
-    # pipeline defaults
     clip_durations: tuple = (15, 30, 60, 90)
     padding_seconds: float = field(default_factory=lambda: _env("CLIPFORGE_PADDING_SECONDS", 0.5))
+    webhook_url: str = field(default_factory=lambda: _env("CLIPFORGE_WEBHOOK_URL", ""))
 
 
 settings = Settings()

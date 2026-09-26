@@ -5,12 +5,22 @@ import textwrap
 from pathlib import Path
 
 STYLES = {
-    "default": {"fontname": "Arial", "fontsize": 18, "primary": "&H00FFFFFF",
-                "outline": "&H00000000", "bold": 1, "marginv": 40},
-    "karaoke": {"fontname": "Arial", "fontsize": 22, "primary": "&H0000FFFF",
-                "outline": "&H00000000", "bold": 1, "marginv": 60},
-    "clean": {"fontname": "Helvetica", "fontsize": 16, "primary": "&H00F8F8F8",
-              "outline": "&H50000000", "bold": 0, "marginv": 30},
+    "default": {
+        "fontname": "Arial", "fontsize": 18, "primary": "&H00FFFFFF",
+        "outline": "&H00000000", "bold": 1, "marginv": 40,
+    },
+    "karaoke": {
+        "fontname": "Arial", "fontsize": 22, "primary": "&H0000FFFF",
+        "outline": "&H00000000", "bold": 1, "marginv": 60,
+    },
+    "clean": {
+        "fontname": "Helvetica", "fontsize": 16, "primary": "&H00F8F8F8",
+        "outline": "&H50000000", "bold": 0, "marginv": 30,
+    },
+    "bold": {
+        "fontname": "Arial Black", "fontsize": 24, "primary": "&H00FFFFFF",
+        "outline": "&H00000000", "bold": 1, "marginv": 50,
+    },
 }
 
 
@@ -21,9 +31,13 @@ def _ts(t: float) -> str:
     return f"{h}:{m:02d}:{s:05.2f}"
 
 
-def segments_to_ass(segments: list[dict], style: str = "default",
-                    play_res_x: int = 1080, play_res_y: int = 1920,
-                    max_chars: int = 42) -> str:
+def segments_to_ass(
+    segments: list[dict],
+    style: str = "default",
+    play_res_x: int = 1080,
+    play_res_y: int = 1920,
+    max_chars: int = 42,
+) -> str:
     st = STYLES.get(style, STYLES["default"])
     lines = [
         "[Script Info]",
@@ -36,8 +50,10 @@ def segments_to_ass(segments: list[dict], style: str = "default",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, "
         "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
         "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        (f"Style: Cap,{st['fontname']},{st['fontsize']},{st['primary']},&H000000FF,"
-         f"{st['outline']},&H80000000,{st['bold']},0,0,0,100,100,0,0,1,2,1,2,20,20,{st['marginv']},1"),
+        (
+            f"Style: Cap,{st['fontname']},{st['fontsize']},{st['primary']},&H000000FF,"
+            f"{st['outline']},&H80000000,{st['bold']},0,0,0,100,100,0,0,1,3,1,2,20,20,{st['marginv']},1"
+        ),
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -59,10 +75,19 @@ def segments_to_ass(segments: list[dict], style: str = "default",
     return "\n".join(lines) + "\n"
 
 
-def write_ass(segments: list[dict], path: Path, style: str = "default",
-              resolution: tuple[int, int] = (1080, 1920)) -> Path:
+def write_ass(
+    segments: list[dict],
+    path: Path,
+    style: str = "default",
+    resolution: tuple[int, int] = (1080, 1920),
+) -> Path:
     path.write_text(
-        segments_to_ass(segments, style=style, play_res_x=resolution[0], play_res_y=resolution[1]),
+        segments_to_ass(
+            segments,
+            style=style,
+            play_res_x=resolution[0],
+            play_res_y=resolution[1],
+        ),
         encoding="utf-8",
     )
     return path

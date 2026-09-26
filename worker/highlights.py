@@ -1,9 +1,9 @@
-"""Highlight detection engine.
+"""Highlight detection engine (v0.6).
 
 Combines transcript signals (hook wording, information density, sentence
-completeness) with measured media signals: speech ratio / silence, audio
-energy peaks and scene-change density. Duplicate / overlapping moments are
-removed before ranking.
+completeness, auto titles) with measured media signals: speech ratio /
+silence, audio energy peaks and scene-change density. Duplicate /
+overlapping moments are removed before ranking.
 """
 from __future__ import annotations
 
@@ -17,8 +17,18 @@ HOOK_PATTERNS = [
     r"\b(why|how)\b.*\?",
     r"^\W*(number \d+|#\d+|\d+ (ways|tips|reasons|things))\b",
     r"\b(i learned|i discovered|the result|finally|turns out)\b",
+    r"\b(what if|imagine if|think about|let me tell you)\b",
+    r"\b(game.?changer|mind.?blowing|life.?changing|never.?before)\b",
 ]
-_EXCITEMENT = re.compile(r"[!?]|amazing|insane|unbelievable|huge|incredible|crazy")
+
+_EXCITEMENT = re.compile(
+    r"[!?]|amazing|insane|unbelievable|huge|incredible|crazy|wow|shocking|powerful",
+    re.I,
+)
+
+TITLE_STOP = re.compile(
+    r"^(so|and|but|well|okay|ok|um|uh|like|you know|basically)\b", re.I
+)
 
 
 @dataclass(frozen=True)
@@ -26,11 +36,11 @@ class Segment:
     start: float
     end: float
     text: str
-    speech_score: float = 0.5   # fraction of window containing speech
-    emotion_score: float = 0.5  # lexical excitement / emphasis
-    audio_score: float = 0.5    # normalised RMS energy vs. track median
-    visual_score: float = 0.5   # scene-change density in window
-    hook_score: float | None = None  # computed from text when None
+    speech_score: float = 0.5
+    emotion_score: float = 0.5
+    audio_score: float = 0.5
+    visual_score: float = 0.5
+    hook_score: float | None = None
 
 
 def hook_strength(text: str) -> float:
@@ -48,32 +58,78 @@ def _emotion(text: str) -> float:
     return min(1.0, base + min(0.25, caps / words))
 
 
+def _make_title(text: str, score_val: int) -> str:
+    """Short human-readable title from the first strong clause."""
+    cleaned = " ".join(text.split())
+    if not cleaned:
+        return f"Highlight ({score_val})"
+    # take first sentence-ish chunk
+    parts = re.split(r"(?<=[.!?])\s+", cleaned)
+    candidate = parts[0] if parts else cleaned
+    candidate = TITLE_STOP.sub("", candidate).strip(" ,;:-")
+    words = candidate.split()
+    if len(words) > 10:
+        candidate = " ".join(words[:10]) + "…"
+    if len(candidate) > 72:
+        candidate = candidate[:69] + "…"
+    return candidate or f"Highlight ({score_val})"
+
+
+def _make_reason(seg: Segment, value: int) -> str:
+    bits = []
+    hook = seg.hook_score if seg.hook_score is not None else hook_strength(seg.text)
+    if hook >= 0.5:
+        bits.append("strong hook")
+    if seg.speech_score >= 0.7:
+        bits.append("clear speech")
+    if seg.emotion_score >= 0.65:
+        bits.append("high energy")
+    if seg.audio_score >= 0.65:
+        bits.append("audio peak")
+    if seg.visual_score >= 0.55:
+        bits.append("visual cuts")
+    if seg.text.rstrip().endswith((".", "!", "?")):
+        bits.append("complete thought")
+    if not bits:
+        bits.append("balanced signals")
+    return f"Score {value}/100 — " + ", ".join(bits) + "."
+
+
 def score(s: Segment) -> int:
     duration = max(0.5, s.end - s.start)
-    density = min(1.0, len(s.text.strip()) / (duration * 4.0))  # ~4 words/sec is full
+    density = min(1.0, len(s.text.strip()) / (duration * 4.0))
     ending = 1.0 if s.text.rstrip().endswith((".", "!", "?")) else 0.45
     hook = s.hook_score if s.hook_score is not None else hook_strength(s.text)
-    emotion = max(s.emotion_score, 0.9 if _EXCITEMENT.search(s.text) else s.emotion_score)
-    return round(100 * (
-        hook * 0.25
-        + density * 0.15
-        + s.speech_score * 0.15
-        + emotion * 0.15
-        + s.audio_score * 0.10
-        + s.visual_score * 0.10
-        + ending * 0.10
-    ))
+    emotion = max(
+        s.emotion_score, 0.9 if _EXCITEMENT.search(s.text) else s.emotion_score
+    )
+    # slight bonus for questions (engagement)
+    q_bonus = 0.05 if "?" in s.text else 0.0
+    return round(
+        100
+        * (
+            hook * 0.24
+            + density * 0.14
+            + s.speech_score * 0.14
+            + emotion * 0.14
+            + s.audio_score * 0.12
+            + s.visual_score * 0.10
+            + ending * 0.10
+            + q_bonus
+        )
+    )
 
 
 def enrich(segments: Iterable[Segment]) -> list[Segment]:
-    """Fill derived signal fields (hook/emotion) from text."""
     out = []
     for s in segments:
-        out.append(replace(
-            s,
-            hook_score=hook_strength(s.text),
-            emotion_score=max(s.emotion_score, _emotion(s.text)),
-        ))
+        out.append(
+            replace(
+                s,
+                hook_score=hook_strength(s.text),
+                emotion_score=max(s.emotion_score, _emotion(s.text)),
+            )
+        )
     return out
 
 
@@ -84,9 +140,13 @@ def _overlap(a: Segment, b: Segment) -> float:
     return inter / max(1e-6, min(a.end - a.start, b.end - b.start))
 
 
-def find_highlights(segments: Iterable[Segment], min_seconds=15, max_seconds=90,
-                    limit=10, dedupe_threshold=0.35):
-    """Rank candidate windows and drop duplicate/overlapping moments."""
+def find_highlights(
+    segments: Iterable[Segment],
+    min_seconds=15,
+    max_seconds=90,
+    limit=10,
+    dedupe_threshold=0.35,
+):
     items = enrich(list(segments))
     candidates: list[tuple[int, Segment]] = []
     n = len(items)
@@ -109,7 +169,8 @@ def find_highlights(segments: Iterable[Segment], min_seconds=15, max_seconds=90,
     chosen: list[tuple[int, Segment]] = []
     for value, seg in candidates:
         dup = any(
-            _overlap(seg, old) > dedupe_threshold or (seg.start < old.end and seg.end > old.start)
+            _overlap(seg, old) > dedupe_threshold
+            or (seg.start < old.end and seg.end > old.start)
             for _, old in chosen
         )
         if dup:
@@ -117,27 +178,41 @@ def find_highlights(segments: Iterable[Segment], min_seconds=15, max_seconds=90,
         chosen.append((value, seg))
         if len(chosen) >= limit:
             break
-    return [
-        {
-            "start": round(seg.start, 2),
-            "end": round(seg.end, 2),
-            "score": value,
-            "text": seg.text,
-            "signals": {
-                "hook": round(seg.hook_score if seg.hook_score is not None else hook_strength(seg.text), 2),
-                "speech": round(seg.speech_score, 2),
-                "emotion": round(seg.emotion_score, 2),
-                "audio": round(seg.audio_score, 2),
-                "visual": round(seg.visual_score, 2),
-            },
-        }
-        for value, seg in chosen
-    ]
+
+    results = []
+    for value, seg in chosen:
+        results.append(
+            {
+                "start": round(seg.start, 2),
+                "end": round(seg.end, 2),
+                "score": value,
+                "text": seg.text,
+                "title": _make_title(seg.text, value),
+                "reason": _make_reason(seg, value),
+                "signals": {
+                    "hook": round(
+                        seg.hook_score
+                        if seg.hook_score is not None
+                        else hook_strength(seg.text),
+                        2,
+                    ),
+                    "speech": round(seg.speech_score, 2),
+                    "emotion": round(seg.emotion_score, 2),
+                    "audio": round(seg.audio_score, 2),
+                    "visual": round(seg.visual_score, 2),
+                },
+            }
+        )
+    return results
 
 
-def build_segments(transcript: dict, energy_curve: list[float], scenes: list[float],
-                   hop: float = 0.5, silence_db: float = -45.0) -> list[Segment]:
-    """Fuse timestamped transcript with measured audio/visual signals."""
+def build_segments(
+    transcript: dict,
+    energy_curve: list[float],
+    scenes: list[float],
+    hop: float = 0.5,
+    silence_db: float = -45.0,
+) -> list[Segment]:
     segs: list[Segment] = []
     for seg in transcript.get("segments", []):
         start, end = float(seg["start"]), float(seg["end"])
@@ -153,8 +228,14 @@ def build_segments(transcript: dict, energy_curve: list[float], scenes: list[flo
             audio_norm = 0.5
         cuts = sum(1 for t in scenes if start <= t <= end)
         visual = min(1.0, 0.2 + cuts * 0.25)
-        segs.append(Segment(round(start, 2), round(end, 2), str(seg.get("text", "")).strip(),
-                            speech_score=round(speech_ratio, 2),
-                            audio_score=round(audio_norm, 2),
-                            visual_score=round(visual, 2)))
+        segs.append(
+            Segment(
+                round(start, 2),
+                round(end, 2),
+                str(seg.get("text", "")).strip(),
+                speech_score=round(speech_ratio, 2),
+                audio_score=round(audio_norm, 2),
+                visual_score=round(visual, 2),
+            )
+        )
     return segs

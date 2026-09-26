@@ -1,4 +1,4 @@
-"""ClipForge processing worker — FastAPI app (v0.7 Phase 1).
+"""ClipForge processing worker — FastAPI app (v0.8 Phase 2).
 
 Pipeline: Web -> Job API -> Worker Queue -> Transcription -> Highlight Engine
           -> FFmpeg -> Generated Clips -> Preview / Download / ZIP
@@ -22,15 +22,15 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 import media
 import pipeline
+from captions import CAPTION_STYLES
 from config import settings
 from highlights import Segment, find_highlights
 from jobs import JobStore
 from schemas import HighlightRequest
 from transcribe import available_engine
 
-VERSION = "0.7.0"
+VERSION = "0.8.0"
 
-# Custom clip length window (seconds) — presets still preferred in UI
 MIN_CLIP_SEC = 5
 MAX_CLIP_SEC = 180
 
@@ -65,7 +65,6 @@ def _data_root() -> Path:
 
 
 def _normalize_durations(raw) -> list[int]:
-    """Accept preset or custom durations in [MIN_CLIP_SEC, MAX_CLIP_SEC]."""
     if not raw:
         return list(settings.clip_durations)
     out: list[int] = []
@@ -178,6 +177,7 @@ def health():
         ),
         "storage_bytes": store.total_size(),
         "clip_duration_range": [MIN_CLIP_SEC, MAX_CLIP_SEC],
+        "caption_styles": list(CAPTION_STYLES),
     }
 
 
@@ -249,6 +249,12 @@ async def job_upload(
         suffix = Path(captions_file.filename).suffix.lower()
         if suffix in (".srt",):
             _save_stream(captions_file, work / "captions.srt", limit_mb=20)
+    # optional BGM sidecar for later render
+    bgm_file = form.get("bgm")
+    if isinstance(bgm_file, UploadFile) and bgm_file.filename:
+        suf = Path(bgm_file.filename).suffix.lower()
+        if suf in (".mp3", ".wav", ".m4a", ".aac", ".ogg"):
+            _save_stream(bgm_file, work / f"bgm{suf}", limit_mb=50)
     (work / "params.json").write_text(json.dumps(job["params"]), encoding="utf-8")
     return {"job_id": job["id"], "status": "queued"}
 
@@ -297,8 +303,10 @@ async def job_render(request: Request, payload: dict):
     highlights = payload.get("highlights") or []
     durations = _normalize_durations(payload.get("durations"))
     style = str(payload.get("caption_style", "default"))
-    if style not in ("default", "karaoke", "clean", "bold"):
-        raise HTTPException(400, "caption_style must be default|karaoke|clean|bold")
+    if style not in CAPTION_STYLES:
+        raise HTTPException(
+            400, f"caption_style must be one of: {', '.join(CAPTION_STYLES)}"
+        )
     aspect = str(payload.get("aspect", "9:16"))
     if aspect not in ("9:16", "1:1", "16:9"):
         aspect = "9:16"
@@ -311,6 +319,11 @@ async def job_render(request: Request, payload: dict):
         "captions": bool(payload.get("captions", True)),
         "caption_style": style,
         "padding": float(payload.get("padding", settings.padding_seconds)),
+        "bgm": bool(payload.get("bgm", False)),
+        "duck": bool(payload.get("duck", True)),
+        "bgm_volume": float(payload.get("bgm_volume", 0.18)),
+        "face_crop": bool(payload.get("face_crop", True)),
+        "platform": str(payload.get("platform", "") or ""),
     }
     if not highlights:
         pj = parent / "job.json"
@@ -321,7 +334,7 @@ async def job_render(request: Request, payload: dict):
     work = media.safe_job_dir(_data_root(), job["id"])
     work.mkdir(parents=True, exist_ok=True)
     params["parent_job"] = parent_id
-    for pat in ("source.*", "transcript.json", "captions.srt"):
+    for pat in ("source.*", "transcript.json", "captions.srt", "bgm.*"):
         for f in parent.glob(pat):
             if f.suffix == ".json" and pat.startswith("source"):
                 continue
@@ -386,7 +399,6 @@ def job_file(job_id: str, file_path: str):
 
 @app.get("/jobs/{job_id}/zip", dependencies=[Depends(require_token)])
 def job_zip(job_id: str):
-    """Stream a ZIP of all rendered MP4 clips for a completed render job."""
     try:
         work = media.safe_job_dir(_data_root(), job_id)
     except ValueError:
@@ -400,7 +412,6 @@ def job_zip(job_id: str):
     mp4s = sorted(clips_dir.glob("*.mp4"))
     if not mp4s:
         raise HTTPException(404, "No MP4 clips to zip.")
-
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for f in mp4s:

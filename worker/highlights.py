@@ -1,15 +1,15 @@
-"""Highlight detection engine (v0.6).
+"""Highlight detection engine (v0.8).
 
-Combines transcript signals (hook wording, information density, sentence
-completeness, auto titles) with measured media signals: speech ratio /
-silence, audio energy peaks and scene-change density. Duplicate /
-overlapping moments are removed before ranking.
+Combines transcript signals with media signals and attaches an English
+social caption + hashtag pack for each ranked clip.
 """
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, replace
 from typing import Iterable
+
+from social import caption as social_caption
 
 HOOK_PATTERNS = [
     r"\b(the secret|most important|here'?s why|here'?s how|nobody tells|the truth about)\b",
@@ -59,11 +59,9 @@ def _emotion(text: str) -> float:
 
 
 def _make_title(text: str, score_val: int) -> str:
-    """Short human-readable title from the first strong clause."""
     cleaned = " ".join(text.split())
     if not cleaned:
         return f"Highlight ({score_val})"
-    # take first sentence-ish chunk
     parts = re.split(r"(?<=[.!?])\s+", cleaned)
     candidate = parts[0] if parts else cleaned
     candidate = TITLE_STOP.sub("", candidate).strip(" ,;:-")
@@ -103,7 +101,6 @@ def score(s: Segment) -> int:
     emotion = max(
         s.emotion_score, 0.9 if _EXCITEMENT.search(s.text) else s.emotion_score
     )
-    # slight bonus for questions (engagement)
     q_bonus = 0.05 if "?" in s.text else 0.0
     return round(
         100
@@ -146,6 +143,7 @@ def find_highlights(
     max_seconds=90,
     limit=10,
     dedupe_threshold=0.35,
+    platform: str = "",
 ):
     items = enrich(list(segments))
     candidates: list[tuple[int, Segment]] = []
@@ -181,14 +179,21 @@ def find_highlights(
 
     results = []
     for value, seg in chosen:
+        title = _make_title(seg.text, value)
+        pack = social_caption(title, seg.text, platform=platform)
         results.append(
             {
                 "start": round(seg.start, 2),
                 "end": round(seg.end, 2),
                 "score": value,
                 "text": seg.text,
-                "title": _make_title(seg.text, value),
+                "title": title,
                 "reason": _make_reason(seg, value),
+                "caption": pack["caption"],
+                "hashtags": pack["hashtags"],
+                "hashtag_line": pack["hashtag_line"],
+                "post": pack["post"],
+                "caption_language": "en",
                 "signals": {
                     "hook": round(
                         seg.hook_score

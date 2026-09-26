@@ -23,18 +23,15 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install --upgrade pip
       - run: pip install -r worker/requirements.txt
-      # Unit tests (no ffmpeg / whisper required)
       - name: Pytest unit suite
         run: |
           cd worker
-          PYTHONPATH=. python -m pytest test_highlights.py test_jobs.py test_captions.py -q
-      # Import + version smoke (catches JobStore kwarg mismatches etc.)
+          PYTHONPATH=. python -m pytest test_highlights.py test_jobs.py test_captions.py test_social.py -q
       - name: Import worker
         run: |
           PYTHONPATH=worker python -c "import main; assert main.VERSION; print('worker', main.VERSION)"
       - name: Compile all
         run: PYTHONPATH=worker python -m compileall -q worker
-      # API tests need a fresh app + token isolation
       - name: Pytest API suite
         run: |
           cd worker

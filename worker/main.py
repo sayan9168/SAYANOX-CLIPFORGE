@@ -1,4 +1,4 @@
-"""ClipForge processing worker — FastAPI app (v0.8 Phase 2).
+"""ClipForge processing worker — FastAPI app (v0.8.1 CI fix).
 
 Pipeline: Web -> Job API -> Worker Queue -> Transcription -> Highlight Engine
           -> FFmpeg -> Generated Clips -> Preview / Download / ZIP
@@ -29,7 +29,7 @@ from jobs import JobStore
 from schemas import HighlightRequest
 from transcribe import available_engine
 
-VERSION = "0.8.0"
+VERSION = "0.8.1"
 
 MIN_CLIP_SEC = 5
 MAX_CLIP_SEC = 180
@@ -249,7 +249,6 @@ async def job_upload(
         suffix = Path(captions_file.filename).suffix.lower()
         if suffix in (".srt",):
             _save_stream(captions_file, work / "captions.srt", limit_mb=20)
-    # optional BGM sidecar for later render
     bgm_file = form.get("bgm")
     if isinstance(bgm_file, UploadFile) and bgm_file.filename:
         suf = Path(bgm_file.filename).suffix.lower()
@@ -293,14 +292,7 @@ async def job_youtube(request: Request, payload: dict):
 
 @app.post("/jobs/render", dependencies=[Depends(require_token)])
 async def job_render(request: Request, payload: dict):
-    parent_id = str(payload.get("parent_job", ""))
-    try:
-        parent = media.safe_job_dir(_data_root(), parent_id) if parent_id else None
-    except ValueError:
-        raise HTTPException(400, "Invalid parent job id.")
-    if not parent or not parent.is_dir():
-        raise HTTPException(404, "Parent analyze job not found.")
-    highlights = payload.get("highlights") or []
+    # Validate body fields FIRST so clients get clear 400s even when parent is missing.
     durations = _normalize_durations(payload.get("durations"))
     style = str(payload.get("caption_style", "default"))
     if style not in CAPTION_STYLES:
@@ -311,6 +303,16 @@ async def job_render(request: Request, payload: dict):
     if aspect not in ("9:16", "1:1", "16:9"):
         aspect = "9:16"
     vertical = aspect == "9:16"
+
+    parent_id = str(payload.get("parent_job", ""))
+    try:
+        parent = media.safe_job_dir(_data_root(), parent_id) if parent_id else None
+    except ValueError:
+        raise HTTPException(400, "Invalid parent job id.")
+    if not parent or not parent.is_dir():
+        raise HTTPException(404, "Parent analyze job not found.")
+
+    highlights = payload.get("highlights") or []
     params = {
         "highlights": highlights,
         "durations": durations,

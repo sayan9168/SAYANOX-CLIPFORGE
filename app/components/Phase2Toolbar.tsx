@@ -1,4 +1,5 @@
 "use client";
+import { useEffect, useRef, useState } from "react";
 import { Clock3, Music2, ScanFace } from "lucide-react";
 
 export type Aspect = "9:16" | "1:1" | "16:9";
@@ -38,6 +39,38 @@ type Props = {
 };
 
 export function Phase2Toolbar(p: Props) {
+  const [localGrade, setLocalGrade] = useState(false);
+  const [localZoom, setLocalZoom] = useState(false);
+  const grade = p.setGrade ? !!p.grade : localGrade;
+  const hookZoom = p.setHookZoom ? !!p.hookZoom : localZoom;
+  const toggleGrade = p.setGrade || setLocalGrade;
+  const toggleZoom = p.setHookZoom || setLocalZoom;
+  const gradeRef = useRef(grade);
+  const zoomRef = useRef(hookZoom);
+  gradeRef.current = grade;
+  zoomRef.current = hookZoom;
+
+  useEffect(() => {
+    const orig = window.fetch.bind(window);
+    window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes("/api/jobs/render") && init?.body && typeof init.body === "string") {
+        try {
+          const body = JSON.parse(init.body);
+          body.grade = gradeRef.current;
+          body.hook_zoom = zoomRef.current;
+          init = { ...init, body: JSON.stringify(body) };
+        } catch {
+          /* keep original body */
+        }
+      }
+      return orig(input, init);
+    };
+    return () => {
+      window.fetch = orig;
+    };
+  }, []);
+
   return (
     <>
       <div className="toolbar">
@@ -96,45 +129,28 @@ export function Phase2Toolbar(p: Props) {
         <button type="button" className="chip" disabled={p.busy} onClick={p.addCustomDuration}>
           Add
         </button>
-        <span className="optLabel" style={{ marginLeft: 8 }}>
-          Aspect
-        </span>
+        <span className="optLabel" style={{ marginLeft: 8 }}>Aspect</span>
         {(["9:16", "1:1", "16:9"] as Aspect[]).map((a) => (
-          <button
-            key={a}
-            type="button"
-            className={p.aspect === a ? "chip on" : "chip"}
-            disabled={p.busy}
-            onClick={() => p.setAspect(a)}
-          >
+          <button key={a} type="button" className={p.aspect === a ? "chip on" : "chip"} disabled={p.busy} onClick={() => p.setAspect(a)}>
             {a}
           </button>
         ))}
-        <span className="optLabel" style={{ marginLeft: 8 }}>
-          Captions
-        </span>
-        {(["default", "karaoke", "clean", "bold", "bengali", "hindi"] as CaptionStyle[]).map(
-          (s) => (
-            <button
-              key={s}
-              type="button"
-              className={p.captionStyle === s && p.burnCaptions ? "chip on" : "chip"}
-              disabled={p.busy}
-              onClick={() => {
-                p.setBurnCaptions(true);
-                p.setCaptionStyle(s);
-              }}
-            >
-              {s}
-            </button>
-          ),
-        )}
-        <button
-          type="button"
-          className={!p.burnCaptions ? "chip on" : "chip"}
-          disabled={p.busy}
-          onClick={() => p.setBurnCaptions(false)}
-        >
+        <span className="optLabel" style={{ marginLeft: 8 }}>Captions</span>
+        {(["default", "karaoke", "clean", "bold", "bengali", "hindi"] as CaptionStyle[]).map((s) => (
+          <button
+            key={s}
+            type="button"
+            className={p.captionStyle === s && p.burnCaptions ? "chip on" : "chip"}
+            disabled={p.busy}
+            onClick={() => {
+              p.setBurnCaptions(true);
+              p.setCaptionStyle(s);
+            }}
+          >
+            {s}
+          </button>
+        ))}
+        <button type="button" className={!p.burnCaptions ? "chip on" : "chip"} disabled={p.busy} onClick={() => p.setBurnCaptions(false)}>
           off
         </button>
         <button type="button" className={p.useBgm ? "chip on" : "chip"} disabled={p.busy} onClick={() => p.setUseBgm((v) => !v)}>
@@ -143,16 +159,12 @@ export function Phase2Toolbar(p: Props) {
         <button type="button" className={p.faceCrop ? "chip on" : "chip"} disabled={p.busy} onClick={() => p.setFaceCrop((v) => !v)}>
           <ScanFace size={12} /> Face crop
         </button>
-        {p.setGrade && (
-          <button type="button" className={p.grade ? "chip on" : "chip"} disabled={p.busy} onClick={() => p.setGrade((v) => !v)}>
-            Grade
-          </button>
-        )}
-        {p.setHookZoom && (
-          <button type="button" className={p.hookZoom ? "chip on" : "chip"} disabled={p.busy} onClick={() => p.setHookZoom((v) => !v)}>
-            Hook zoom
-          </button>
-        )}
+        <button type="button" className={grade ? "chip on" : "chip"} disabled={p.busy} onClick={() => toggleGrade((v) => !v)}>
+          Grade
+        </button>
+        <button type="button" className={hookZoom ? "chip on" : "chip"} disabled={p.busy} onClick={() => toggleZoom((v) => !v)}>
+          Hook zoom
+        </button>
         <button className="renderBtn" onClick={p.onRender} disabled={p.busy || !p.durations.length} style={{ marginLeft: "auto" }}>
           Render {Math.max(1, Math.min(p.highlightCount, p.durations.length || 1))} clip(s)
         </button>

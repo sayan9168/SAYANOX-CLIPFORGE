@@ -1,7 +1,7 @@
 """End-to-end pipeline handlers executed by the job queue.
 
   analyze : source media -> transcript + signals -> ranked highlights
-  render  : highlight window -> padded MP4 clip (landscape / vertical, captions)
+  render  : highlight window -> padded MP4 clip (landscape / vertical, captions, optional BGM)
 """
 from __future__ import annotations
 
@@ -24,7 +24,6 @@ def _save(work: Path, name: str, data) -> None:
 
 
 def _resolve_source(work: Path, params: dict) -> tuple[Path, dict]:
-    """Locate the source media inside the job dir (upload or yt-dlp download)."""
     cands = [p for p in work.glob("source.*") if p.suffix != ".json"]
     if not cands:
         url = params.get("url")
@@ -57,11 +56,10 @@ def handle_analyze(job: dict, work: Path, progress) -> dict:
         transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
     else:
         try:
-            transcript = transcribe(wav, settings.whisper_model,
-                                    settings.whisper_device, settings.whisper_compute)
+            transcript = transcribe(
+                wav, settings.whisper_model, settings.whisper_device, settings.whisper_compute
+            )
         except RuntimeError:
-            # No local Whisper backend installed. Fall back to SRT sidecar
-            # captions when the uploader supplied one; otherwise fail clearly.
             transcript = _transcript_from_srt(work)
             if transcript is None:
                 raise
@@ -103,8 +101,6 @@ def handle_analyze(job: dict, work: Path, progress) -> dict:
 
 def _padded_window(highlight: dict, durations: list[int], duration: float,
                    pad: float) -> tuple[float, float, int]:
-    """Pick the closest allowed target length and add intelligent padding that
-    snaps toward sentence/scene boundaries instead of cutting mid-word."""
     hl_len = highlight["end"] - highlight["start"]
     target = min(durations, key=lambda d: abs(d - hl_len))
     start = max(0.0, float(highlight["start"]) - pad)
@@ -112,12 +108,10 @@ def _padded_window(highlight: dict, durations: list[int], duration: float,
     if duration:
         end = min(end, duration)
         start = max(0.0, end - target)
-    # snap start back to a nearby silence gap when possible (energy curve)
     return round(start, 2), round(end, 2), target
 
 
 def _transcript_from_srt(work: Path) -> dict | None:
-    """Parse an optional `captions.srt` sidecar into transcript shape."""
     srt = work / "captions.srt"
     if not srt.is_file():
         return None
@@ -139,14 +133,19 @@ def _transcript_from_srt(work: Path) -> dict | None:
     return {"language": "unknown", "segments": segs, "engine": "srt-sidecar"}
 
 
+def _find_bgm(work: Path) -> Path | None:
+    for name in ("bgm.mp3", "bgm.wav", "bgm.m4a", "bgm.aac", "bgm.ogg"):
+        p = work / name
+        if p.is_file():
+            return p
+    return None
+
 
 def handle_render(job: dict, work: Path, progress) -> dict:
     from config import settings
 
     params = _load_params(work)
-    # source may live in the parent analyze job dir (YouTube downloads happen
-    # there); copy it into this render sandbox on demand.
-    src = (work / "source.mp4")
+    src = work / "source.mp4"
     if not src.is_file():
         cands = [p for p in work.glob("source.*") if p.suffix != ".json"]
         if not cands:
@@ -163,6 +162,12 @@ def handle_render(job: dict, work: Path, progress) -> dict:
                         src = target
                         copied = True
                         break
+                    # optional BGM from parent
+                    for f in parent.glob("bgm.*"):
+                        try:
+                            shutil.copy(f, work / f.name)
+                        except OSError:
+                            pass
                 except (ValueError, OSError):
                     copied = False
             if not copied:
@@ -174,20 +179,35 @@ def handle_render(job: dict, work: Path, progress) -> dict:
 
     clips_dir = work / "clips"
     clips_dir.mkdir(exist_ok=True)
-    transcript = json.loads((work / "transcript.json").read_text(encoding="utf-8")) \
-        if (work / "transcript.json").is_file() else {"segments": []}
+    transcript = (
+        json.loads((work / "transcript.json").read_text(encoding="utf-8"))
+        if (work / "transcript.json").is_file()
+        else {"segments": []}
+    )
 
-    durations = [int(d) for d in params.get("durations", settings.clip_durations)] \
-        or [max(1, int(round(float(params.get("end", 30)) - float(params.get("start", 0)))))]
+    durations = [int(d) for d in params.get("durations", settings.clip_durations)] or [
+        max(1, int(round(float(params.get("end", 30)) - float(params.get("start", 0)))))
+    ]
     vertical = bool(params.get("vertical", True))
+    aspect = str(params.get("aspect", "9:16" if vertical else "16:9"))
     caption_style = params.get("caption_style", "default")
     burn = bool(params.get("captions", True))
     pad = float(params.get("padding", settings.padding_seconds))
+    use_bgm = bool(params.get("bgm", False))
+    duck = bool(params.get("duck", True))
+    bgm_vol = float(params.get("bgm_volume", 0.18))
+    face_crop = bool(params.get("face_crop", True))
+
+    bgm_path = _find_bgm(work) if use_bgm else None
 
     outputs = []
-    items = params.get("highlights") or [{"start": float(params.get("start", 0)),
-                                          "end": float(params.get("end", 30)),
-                                          "score": 100}]
+    items = params.get("highlights") or [
+        {
+            "start": float(params.get("start", 0)),
+            "end": float(params.get("end", 30)),
+            "score": 100,
+        }
+    ]
     total = max(1, len(items))
     for idx, hl in enumerate(items):
         base = f"clip-{idx + 1:02d}"
@@ -195,73 +215,141 @@ def handle_render(job: dict, work: Path, progress) -> dict:
         start, end, target = _padded_window(hl, durations, duration, pad)
         if end <= start:
             continue
-        media.run_ffmpeg("-ss", str(start), "-to", str(end), "-i", str(src),
-                         "-map", "0:v:0", "-map", "0:a:0?",
-                         "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
-                         "-pix_fmt", "yuv420p", "-c:a", "aac",
-                         "-movflags", "+faststart", str(raw_out))
-        final = clips_dir / f"{base}-{'vertical' if vertical else 'landscape'}.mp4"
-        seg_window = [s for s in transcript["segments"]
-                      if float(s["end"]) > start and float(s["start"]) < end]
-        shifted = [{"start": max(0.0, float(s["start"]) - start),
-                    "end": min(target, float(s["end"]) - start),
-                    "text": s["text"]} for s in seg_window]
+        media.run_ffmpeg(
+            "-ss", str(start), "-to", str(end), "-i", str(src),
+            "-map", "0:v:0", "-map", "0:a:0?",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+            "-pix_fmt", "yuv420p", "-c:a", "aac",
+            "-movflags", "+faststart", str(raw_out),
+        )
+        suffix = {
+            "9:16": "vertical",
+            "1:1": "square",
+            "16:9": "landscape",
+        }.get(aspect, "vertical" if vertical else "landscape")
+        final = clips_dir / f"{base}-{suffix}.mp4"
+        seg_window = [
+            s
+            for s in transcript["segments"]
+            if float(s["end"]) > start and float(s["start"]) < end
+        ]
+        shifted = [
+            {
+                "start": max(0.0, float(s["start"]) - start),
+                "end": min(target, float(s["end"]) - start),
+                "text": s["text"],
+            }
+            for s in seg_window
+        ]
         cap_file = work / f"{base}.ass"
         render_vf: list[str] = []
         if burn and shifted:
-            res = (1080, 1920) if vertical else (info.get("width") or 1920, info.get("height") or 1080)
+            if aspect == "1:1":
+                res = (1080, 1080)
+            elif aspect == "16:9":
+                res = (1920, 1080)
+            else:
+                res = (1080, 1920)
             captions.write_ass(shifted, cap_file, style=caption_style, resolution=res)
             render_vf.append(f"subtitles={cap_file.name}:fontsdir=.")
 
         center_x = None
-        if vertical:
-            track = media.speaker_track(src, start, end)
-            if track:
-                center_x = sum(track) / len(track)
-        _render_final(raw_out, final, info, center_x if vertical else None,
-                      render_vf, vertical, work)
+        if vertical or aspect == "9:16":
+            if face_crop:
+                center_x = media.face_center_x(src, start, end)
+            if center_x is None:
+                track = media.speaker_track(src, start, end)
+                if track:
+                    center_x = sum(track) / len(track)
+
+        staged = work / f"{base}-staged.mp4"
+        _render_final(
+            raw_out,
+            staged if (bgm_path and use_bgm) else final,
+            info,
+            center_x,
+            render_vf,
+            aspect,
+            work,
+        )
+        if bgm_path and use_bgm and staged.is_file():
+            try:
+                media.mix_bgm(
+                    staged, bgm_path, final, bgm_vol=bgm_vol, duck=duck
+                )
+            except Exception:
+                shutil.copy(staged, final)
+            staged.unlink(missing_ok=True)
+
         size = final.stat().st_size if final.is_file() else 0
-        outputs.append({
-            "file": final.name, "start": start, "end": end, "duration": round(end - start, 2),
-            "target": target, "score": hl.get("score"), "vertical": vertical,
-            "captions": burn and bool(shifted), "bytes": size,
-            "download": f"/jobs/{job['id']}/files/clips/{final.name}",
-        })
+        outputs.append(
+            {
+                "file": final.name,
+                "start": start,
+                "end": end,
+                "duration": round(end - start, 2),
+                "target": target,
+                "score": hl.get("score"),
+                "vertical": aspect == "9:16",
+                "aspect": aspect,
+                "captions": burn and bool(shifted),
+                "bgm": bool(bgm_path and use_bgm),
+                "bytes": size,
+                "download": f"/jobs/{job['id']}/files/clips/{final.name}",
+            }
+        )
         progress(10 + int(85 * (idx + 1) / total))
     _save(work, "render.json", outputs)
     return {"clips": outputs}
 
 
-def _render_final(raw: Path, dst: Path, info: dict, center_x, vf_captions: list[str],
-                  vertical: bool, work: Path) -> None:
-    """Single ffmpeg pass: optional 9:16 tracking crop + optional burned captions.
-
-    Runs with cwd set to the job dir so the relative subtitles= path cannot
-    escape the job sandbox."""
+def _render_final(
+    raw: Path,
+    dst: Path,
+    info: dict,
+    center_x,
+    vf_captions: list[str],
+    aspect: str,
+    work: Path,
+) -> None:
     w, h = info.get("width") or 0, info.get("height") or 0
     vf: list[str] = []
     post: list[str] = []
-    if vertical and w and h:
+    if aspect == "9:16" and w and h:
         cw = min(w, int(h * 9 / 16))
         cw -= cw % 2
         lo, hi = cw // 2, max(cw // 2, w - cw // 2)
         cx = "W/2" if center_x is None else f"clip({center_x:.3f}*W,{lo},{hi})"
         vf.append(f"crop={cw}:ih:{cx}:0")
         post.append("scale=1080:1920:flags=bicubic")
-    elif vertical:
-        post.append("scale=1080:1920:force_original_aspect_ratio=decrease,"
-                    "pad=1080:1920:(ow-iw)/2:(oh-ih)/2")
+    elif aspect == "9:16":
+        post.append(
+            "scale=1080:1920:force_original_aspect_ratio=decrease,"
+            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2"
+        )
+    elif aspect == "1:1" and w and h:
+        side = min(w, h)
+        side -= side % 2
+        post.append(
+            f"crop={side}:{side}:(iw-{side})/2:(ih-{side})/2,scale=1080:1080:flags=bicubic"
+        )
+    elif aspect == "1:1":
+        post.append(
+            "scale=1080:1080:force_original_aspect_ratio=decrease,"
+            "pad=1080:1080:(ow-iw)/2:(oh-ih)/2"
+        )
+    # 16:9 keeps original framing, optional scale
     if vf_captions:
-        # burn captions after the crop but scale up afterwards so subtitle
-        # font sizes map to the 1080x1920 PlayRes of the generated .ass file
         chain = ",".join(vf + vf_captions + post)
     else:
         chain = ",".join(vf + post)
     args = ["-i", str(raw)]
     if chain:
-        args += ["-vf", chain, "-map", "0:v:0", "-map", "0:a:0?",
-                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
-                 "-pix_fmt", "yuv420p", "-r", "30", "-c:a", "aac"]
+        args += [
+            "-vf", chain, "-map", "0:v:0", "-map", "0:a:0?",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+            "-pix_fmt", "yuv420p", "-r", "30", "-c:a", "aac",
+        ]
     else:
         args += ["-c", "copy"]
     args += ["-movflags", "+faststart", str(dst)]

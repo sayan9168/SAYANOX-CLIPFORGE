@@ -1,8 +1,4 @@
-"""End-to-end pipeline handlers executed by the job queue.
-
-  analyze : source media -> transcript + signals -> ranked highlights
-  render  : highlight window -> padded MP4 clip (landscape / vertical, captions, optional BGM)
-"""
+"""End-to-end pipeline handlers executed by the job queue."""
 from __future__ import annotations
 
 import json
@@ -13,6 +9,7 @@ from pathlib import Path
 import captions
 import media
 from highlights import build_segments, find_highlights
+from pipeline_hooks import grab_thumbnail, window_for
 
 
 def _load_params(work: Path) -> dict:
@@ -101,14 +98,7 @@ def handle_analyze(job: dict, work: Path, progress) -> dict:
 
 def _padded_window(highlight: dict, durations: list[int], duration: float,
                    pad: float) -> tuple[float, float, int]:
-    hl_len = highlight["end"] - highlight["start"]
-    target = min(durations, key=lambda d: abs(d - hl_len))
-    start = max(0.0, float(highlight["start"]) - pad)
-    end = start + target
-    if duration:
-        end = min(end, duration)
-        start = max(0.0, end - target)
-    return round(start, 2), round(end, 2), target
+    return window_for(highlight, durations, duration, pad)
 
 
 def _transcript_from_srt(work: Path) -> dict | None:
@@ -162,7 +152,6 @@ def handle_render(job: dict, work: Path, progress) -> dict:
                         src = target
                         copied = True
                         break
-                    # optional BGM from parent
                     for f in parent.glob("bgm.*"):
                         try:
                             shutil.copy(f, work / f.name)
@@ -197,16 +186,11 @@ def handle_render(job: dict, work: Path, progress) -> dict:
     duck = bool(params.get("duck", True))
     bgm_vol = float(params.get("bgm_volume", 0.18))
     face_crop = bool(params.get("face_crop", True))
-
     bgm_path = _find_bgm(work) if use_bgm else None
 
     outputs = []
     items = params.get("highlights") or [
-        {
-            "start": float(params.get("start", 0)),
-            "end": float(params.get("end", 30)),
-            "score": 100,
-        }
+        {"start": float(params.get("start", 0)), "end": float(params.get("end", 30)), "score": 100}
     ]
     total = max(1, len(items))
     for idx, hl in enumerate(items):
@@ -222,15 +206,12 @@ def handle_render(job: dict, work: Path, progress) -> dict:
             "-pix_fmt", "yuv420p", "-c:a", "aac",
             "-movflags", "+faststart", str(raw_out),
         )
-        suffix = {
-            "9:16": "vertical",
-            "1:1": "square",
-            "16:9": "landscape",
-        }.get(aspect, "vertical" if vertical else "landscape")
+        suffix = {"9:16": "vertical", "1:1": "square", "16:9": "landscape"}.get(
+            aspect, "vertical" if vertical else "landscape"
+        )
         final = clips_dir / f"{base}-{suffix}.mp4"
         seg_window = [
-            s
-            for s in transcript["segments"]
+            s for s in transcript["segments"]
             if float(s["end"]) > start and float(s["start"]) < end
         ]
         shifted = [
@@ -243,14 +224,19 @@ def handle_render(job: dict, work: Path, progress) -> dict:
         ]
         cap_file = work / f"{base}.ass"
         render_vf: list[str] = []
-        if burn and shifted:
+        hook = str(hl.get("title") or hl.get("text") or "")[:72]
+        if burn and (shifted or hook):
             if aspect == "1:1":
                 res = (1080, 1080)
             elif aspect == "16:9":
                 res = (1920, 1080)
             else:
                 res = (1080, 1920)
-            captions.write_ass(shifted, cap_file, style=caption_style, resolution=res)
+            captions.write_ass(
+                shifted or [{"start": 0, "end": 2.0, "text": ""}],
+                cap_file, style=caption_style, resolution=res,
+                hook_text=hook, hook_seconds=2.0,
+            )
             render_vf.append(f"subtitles={cap_file.name}:fontsdir=.")
 
         center_x = None
@@ -266,22 +252,17 @@ def handle_render(job: dict, work: Path, progress) -> dict:
         _render_final(
             raw_out,
             staged if (bgm_path and use_bgm) else final,
-            info,
-            center_x,
-            render_vf,
-            aspect,
-            work,
+            info, center_x, render_vf, aspect, work,
         )
         if bgm_path and use_bgm and staged.is_file():
             try:
-                media.mix_bgm(
-                    staged, bgm_path, final, bgm_vol=bgm_vol, duck=duck
-                )
+                media.mix_bgm(staged, bgm_path, final, bgm_vol=bgm_vol, duck=duck)
             except Exception:
                 shutil.copy(staged, final)
             staged.unlink(missing_ok=True)
 
         size = final.stat().st_size if final.is_file() else 0
+        thumb = grab_thumbnail(src, clips_dir / f"{base}-{suffix}.jpg", start)
         outputs.append(
             {
                 "file": final.name,
@@ -292,9 +273,10 @@ def handle_render(job: dict, work: Path, progress) -> dict:
                 "score": hl.get("score"),
                 "vertical": aspect == "9:16",
                 "aspect": aspect,
-                "captions": burn and bool(shifted),
+                "captions": burn and bool(shifted or hook),
                 "bgm": bool(bgm_path and use_bgm),
                 "bytes": size,
+                "thumbnail": thumb.name if thumb else None,
                 "download": f"/jobs/{job['id']}/files/clips/{final.name}",
             }
         )
@@ -303,15 +285,7 @@ def handle_render(job: dict, work: Path, progress) -> dict:
     return {"clips": outputs}
 
 
-def _render_final(
-    raw: Path,
-    dst: Path,
-    info: dict,
-    center_x,
-    vf_captions: list[str],
-    aspect: str,
-    work: Path,
-) -> None:
+def _render_final(raw: Path, dst: Path, info: dict, center_x, vf_captions: list[str], aspect: str, work: Path) -> None:
     w, h = info.get("width") or 0, info.get("height") or 0
     vf: list[str] = []
     post: list[str] = []
@@ -323,33 +297,19 @@ def _render_final(
         vf.append(f"crop={cw}:ih:{cx}:0")
         post.append("scale=1080:1920:flags=bicubic")
     elif aspect == "9:16":
-        post.append(
-            "scale=1080:1920:force_original_aspect_ratio=decrease,"
-            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2"
-        )
+        post.append("scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2")
     elif aspect == "1:1" and w and h:
         side = min(w, h)
         side -= side % 2
-        post.append(
-            f"crop={side}:{side}:(iw-{side})/2:(ih-{side})/2,scale=1080:1080:flags=bicubic"
-        )
+        post.append(f"crop={side}:{side}:(iw-{side})/2:(ih-{side})/2,scale=1080:1080:flags=bicubic")
     elif aspect == "1:1":
-        post.append(
-            "scale=1080:1080:force_original_aspect_ratio=decrease,"
-            "pad=1080:1080:(ow-iw)/2:(oh-ih)/2"
-        )
-    # 16:9 keeps original framing, optional scale
-    if vf_captions:
-        chain = ",".join(vf + vf_captions + post)
-    else:
-        chain = ",".join(vf + post)
+        post.append("scale=1080:1080:force_original_aspect_ratio=decrease,pad=1080:1080:(ow-iw)/2:(oh-ih)/2")
+    chain = ",".join(vf + vf_captions + post)
     args = ["-i", str(raw)]
     if chain:
-        args += [
-            "-vf", chain, "-map", "0:v:0", "-map", "0:a:0?",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
-            "-pix_fmt", "yuv420p", "-r", "30", "-c:a", "aac",
-        ]
+        args += ["-vf", chain, "-map", "0:v:0", "-map", "0:a:0?",
+                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+                 "-pix_fmt", "yuv420p", "-r", "30", "-c:a", "aac"]
     else:
         args += ["-c", "copy"]
     args += ["-movflags", "+faststart", str(dst)]

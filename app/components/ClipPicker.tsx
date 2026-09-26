@@ -1,5 +1,5 @@
 "use client";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Play } from "lucide-react";
 import { SocialCaption } from "./SocialCaption";
 import { WaveformTimeline } from "./WaveformTimeline";
@@ -20,6 +20,8 @@ function fmt(s: number) {
 
 function lastAnalyzeJob(): string {
   try {
+    const live = sessionStorage.getItem("clipforge-analyze-job");
+    if (live) return live;
     const raw = localStorage.getItem("clipforge-history-v1");
     const items = raw ? JSON.parse(raw) as { id: string; kind: string }[] : [];
     return items.find((h) => h.kind === "analyze" || h.kind === "upload")?.id || "";
@@ -41,13 +43,37 @@ export function ClipPicker({
   jobId?: string;
 }) {
   const [open, setOpen] = useState<number | null>(null);
+  const [resolvedJob, setResolvedJob] = useState(jobId || lastAnalyzeJob());
   const vids = useRef<Record<number, HTMLVideoElement | null>>({});
-  const previewJob = jobId || lastAnalyzeJob();
+  const previewJob = jobId || resolvedJob;
   const marks = clips.map((c, i) => ({
     start: trims[i]?.start ?? c.start,
     end: trims[i]?.end ?? c.end,
   }));
   const span = marks.reduce((m, x) => Math.max(m, x.end), 1);
+
+  useEffect(() => {
+    if (jobId) {
+      setResolvedJob(jobId);
+      try { sessionStorage.setItem("clipforge-analyze-job", jobId); } catch {}
+      return;
+    }
+    if (resolvedJob) return;
+    let cancelled = false;
+    fetch("/api/jobs/list", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((d) => {
+        if (cancelled) return;
+        const jobs = (d.jobs || []) as { id: string; kind: string; status: string }[];
+        const hit = jobs.find((j) => j.kind === "analyze" && j.status === "completed") || jobs.find((j) => j.kind === "analyze");
+        if (hit?.id) {
+          setResolvedJob(hit.id);
+          try { sessionStorage.setItem("clipforge-analyze-job", hit.id); } catch {}
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [jobId, resolvedJob]);
 
   function toggle(i: number) {
     const next = selected.slice();

@@ -40,15 +40,13 @@ def build_store(data_dir: Path, concurrency: int, max_attempts: int,
         concurrency=concurrency,
         max_attempts=max_attempts,
         ttl_hours=ttl_hours,
-        max_total_gb=max_total_gb,  # must match jobs.JobStore.__init__
+        max_total_gb=max_total_gb,
     )
     store.register_handler("analyze", pipeline.handle_analyze)
     store.register_handler("render", pipeline.handle_render)
     return store
 
 
-# Default production store; tests may swap it via monkeypatch (handlers read
-# `store` lazily at request time, so the swap takes effect immediately).
 store = build_store(
     settings.data_dir,
     settings.worker_concurrency,
@@ -60,19 +58,16 @@ store = build_store(
 _YT = re.compile(r"^https?://(www\.)?(youtube\.com|youtu\.be)/[A-Za-z0-9._%\-/?&=#]+$", re.I)
 
 
-# ---------------- security middleware ----------------
-class RateLimit(BaseHTTPMiddleware):
-    """Simple fixed-window per-client-IP limiter for mutating endpoints.
+def _data_root() -> Path:
+    """Canonical job storage root — always the live JobStore root.
 
-    All mutable state (hit counters + lock) lives on the innermost ASGI
-    application object, never on this middleware instance: Starlette's
-    TestClient deep-copies the middleware stack for every client, so
-    instance attributes would be duplicated per copy and leak across tests
-    in confusing ways. The app object is shared by every client of the same
-    FastAPI instance, which keeps exactly one true limiter per deployment —
-    and lets tests build a fresh app to reset the window cleanly.
+    Tests monkeypatch `store`; using store.root (not settings.data_dir) keeps
+    path checks and persistence on the same directory.
     """
+    return Path(store.root)
 
+
+class RateLimit(BaseHTTPMiddleware):
     def __init__(self, app, limit: int = 0, window: float = 60.0):
         super().__init__(app)
         self.static_limit = limit
@@ -118,7 +113,7 @@ def require_token(request: Request) -> None:
     from config import settings as live_settings
     token = live_settings.api_token
     if not token:
-        return  # open mode (local dev)
+        return
     header = request.headers.get("authorization", "")
     if header != f"Bearer {token}":
         raise HTTPException(status_code=401, detail="Missing or invalid worker token.")
@@ -130,7 +125,7 @@ async def lifespan(app: FastAPI):
     stop = threading.Event()
 
     def janitor():
-        while not stop.wait(600):  # every 10 minutes
+        while not stop.wait(600):
             try:
                 store.cleanup()
             except Exception:
@@ -144,12 +139,6 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
-    """Build a fully-wired FastAPI instance.
-
-    A fresh instance carries fresh rate-limiter state (the counters live on
-    the app object), which keeps unit tests isolated and makes production
-    startup explicit: `app = create_app()` below.
-    """
     app = FastAPI(title="SAYANOX CLIPFORGE Worker", version=VERSION, lifespan=lifespan)
     app.add_middleware(RateLimit, limit=settings.rate_limit_per_minute)
     return app
@@ -158,7 +147,6 @@ def create_app() -> FastAPI:
 app = create_app()
 
 
-# ---------------- basic endpoints ----------------
 @app.get("/health")
 def health():
     return {
@@ -177,7 +165,6 @@ def health():
 
 
 def _save_stream(upload: UploadFile, dest: Path, limit_mb: int | None = None) -> int:
-    """Stream an upload to disk enforcing the size cap; returns bytes written."""
     from config import settings as live_settings
     limit = (limit_mb if limit_mb is not None else live_settings.max_upload_mb) * 1024 * 1024
     written = 0
@@ -200,7 +187,7 @@ def _save_stream(upload: UploadFile, dest: Path, limit_mb: int | None = None) ->
 def _validate_media_name(filename: str | None) -> str:
     if not filename:
         raise HTTPException(400, "Missing filename.")
-    safe = Path(filename).name  # strip any directory components
+    safe = Path(filename).name
     suffix = Path(safe).suffix.lower()
     if suffix not in media.ALLOWED_EXTENSIONS:
         raise HTTPException(
@@ -211,7 +198,6 @@ def _validate_media_name(filename: str | None) -> str:
     return safe
 
 
-# ---------------- job endpoints ----------------
 @app.post("/jobs/upload", dependencies=[Depends(require_token)])
 async def job_upload(
     request: Request,
@@ -222,7 +208,7 @@ async def job_upload(
     captions: UploadFile | None = File(None),
 ):
     form = await request.form()
-    if isinstance(captions, list):  # defensive: duplicate field -> reject
+    if isinstance(captions, list):
         raise HTTPException(400, "Duplicate 'captions' field.")
     name = _validate_media_name(video.filename)
     if max_seconds < min_seconds:
@@ -237,12 +223,12 @@ async def job_upload(
         },
         client=request.client.host if request.client else "",
     )
-    work = media.safe_job_dir(settings.data_dir, job["id"])
+    work = media.safe_job_dir(_data_root(), job["id"])
+    work.mkdir(parents=True, exist_ok=True)
     src = work / f"source{Path(name).suffix}"
     _save_stream(video, src)
     captions_file = form.get("captions")
     if isinstance(captions_file, UploadFile) and captions_file.filename:
-        # optional SRT sidecar used when no local Whisper backend is installed
         suffix = Path(captions_file.filename).suffix.lower()
         if suffix in (".srt",):
             _save_stream(captions_file, work / "captions.srt", limit_mb=20)
@@ -251,7 +237,6 @@ async def job_upload(
 
 
 def _youtube_params(payload: dict) -> dict:
-    """Validate + normalise a YouTube job payload into analyze params."""
     url = str(payload.get("url", "")).strip()
     if not _YT.match(url):
         raise HTTPException(400, "Enter a valid YouTube URL.")
@@ -272,7 +257,8 @@ def _youtube_params(payload: dict) -> dict:
 async def job_youtube(request: Request, payload: dict):
     params = _youtube_params(payload)
     job = store.create("analyze", params, client=request.client.host or "")
-    work = media.safe_job_dir(settings.data_dir, job["id"])
+    work = media.safe_job_dir(_data_root(), job["id"])
+    work.mkdir(parents=True, exist_ok=True)
     (work / "params.json").write_text(json.dumps(params), encoding="utf-8")
     return {
         "job_id": job["id"],
@@ -286,7 +272,7 @@ async def job_youtube(request: Request, payload: dict):
 async def job_render(request: Request, payload: dict):
     parent_id = str(payload.get("parent_job", ""))
     try:
-        parent = media.safe_job_dir(settings.data_dir, parent_id) if parent_id else None
+        parent = media.safe_job_dir(_data_root(), parent_id) if parent_id else None
     except ValueError:
         raise HTTPException(400, "Invalid parent job id.")
     if not parent or not parent.is_dir():
@@ -318,9 +304,9 @@ async def job_render(request: Request, payload: dict):
             result = json.loads(pj.read_text(encoding="utf-8")).get("result") or {}
             params["highlights"] = result.get("clips", [])[: len(durations) or 1]
     job = store.create("render", params, client=request.client.host or "")
-    work = media.safe_job_dir(settings.data_dir, job["id"])
-    params["parent_job"] = parent_id  # lets the render handler re-locate source files
-    # hard-link (fallback copy) the source + transcript so render is sandboxed
+    work = media.safe_job_dir(_data_root(), job["id"])
+    work.mkdir(parents=True, exist_ok=True)
+    params["parent_job"] = parent_id
     for pat in ("source.*", "transcript.json", "captions.srt"):
         for f in parent.glob(pat):
             if f.suffix == ".json" and pat.startswith("source"):
@@ -337,7 +323,7 @@ async def job_render(request: Request, payload: dict):
 @app.get("/jobs/{job_id}", dependencies=[Depends(require_token)])
 def job_status(job_id: str):
     try:
-        media.safe_job_dir(settings.data_dir, job_id)
+        media.safe_job_dir(_data_root(), job_id)
     except ValueError:
         raise HTTPException(400, "Invalid job id.")
     job = store.get(job_id)
@@ -353,8 +339,6 @@ def job_status(job_id: str):
         "error": job["error"],
         "result": job.get("result"),
     }
-    # lightweight status view while a render is running (so the UI can show
-    # per-clip progress without shipping partial binaries)
     if job["kind"] == "render" and job["status"] == "processing":
         done = [c.get("file") for c in (job.get("result") or {}).get("clips", [])]
         if done:
@@ -365,7 +349,7 @@ def job_status(job_id: str):
 @app.get("/jobs/{job_id}/files/{file_path:path}", dependencies=[Depends(require_token)])
 def job_file(job_id: str, file_path: str):
     try:
-        work = media.safe_job_dir(settings.data_dir, job_id)
+        work = media.safe_job_dir(_data_root(), job_id)
     except ValueError:
         raise HTTPException(400, "Invalid job id.")
     target = (work / file_path).resolve()
@@ -388,7 +372,7 @@ def job_file(job_id: str, file_path: str):
 @app.post("/jobs/{job_id}/retry", dependencies=[Depends(require_token)])
 def job_retry(job_id: str):
     try:
-        media.safe_job_dir(settings.data_dir, job_id)
+        media.safe_job_dir(_data_root(), job_id)
     except ValueError:
         raise HTTPException(400, "Invalid job id.")
     job = store.retry(job_id)
@@ -400,7 +384,7 @@ def job_retry(job_id: str):
 @app.delete("/jobs/{job_id}", dependencies=[Depends(require_token)])
 def job_delete(job_id: str):
     try:
-        media.safe_job_dir(settings.data_dir, job_id)
+        media.safe_job_dir(_data_root(), job_id)
     except ValueError:
         raise HTTPException(400, "Invalid job id.")
     if not store.delete(job_id):
@@ -413,7 +397,6 @@ def jobs_cleanup():
     return store.cleanup()
 
 
-# ---------------- legacy / stateless endpoints (kept compatible) ----------------
 @app.post("/score")
 async def score_segments(payload: HighlightRequest):
     try:
@@ -442,12 +425,12 @@ async def score_segments(payload: HighlightRequest):
 async def create_clip(
     video: UploadFile = File(...), start: float = Form(0), end: float = Form(30)
 ):
-    """Legacy one-shot endpoint — now backed by the render job queue."""
     if end <= start or end - start > 300:
         raise HTTPException(400, "Clip must be 0-300 seconds.")
     name = _validate_media_name(video.filename)
     job_id = store.create("render", {"start": start, "end": end})["id"]
-    work = media.safe_job_dir(settings.data_dir, job_id)
+    work = media.safe_job_dir(_data_root(), job_id)
+    work.mkdir(parents=True, exist_ok=True)
     src = work / f"source{Path(name).suffix}"
     _save_stream(video, src)
     (work / "params.json").write_text(

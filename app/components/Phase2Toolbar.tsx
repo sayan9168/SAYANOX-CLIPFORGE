@@ -29,6 +29,10 @@ type Props = {
   setUseBgm: (v: boolean | ((x: boolean) => boolean)) => void;
   faceCrop: boolean;
   setFaceCrop: (v: boolean | ((x: boolean) => boolean)) => void;
+  grade?: boolean;
+  setGrade?: (v: boolean | ((x: boolean) => boolean)) => void;
+  hookZoom?: boolean;
+  setHookZoom?: (v: boolean | ((x: boolean) => boolean)) => void;
   onRender: () => void;
   highlightCount: number;
 };
@@ -133,29 +137,23 @@ export function Phase2Toolbar(p: Props) {
         >
           off
         </button>
-        <button
-          type="button"
-          className={p.useBgm ? "chip on" : "chip"}
-          disabled={p.busy}
-          onClick={() => p.setUseBgm((v) => !v)}
-          title="Mix bgm.* from job if present"
-        >
+        <button type="button" className={p.useBgm ? "chip on" : "chip"} disabled={p.busy} onClick={() => p.setUseBgm((v) => !v)}>
           <Music2 size={12} /> BGM
         </button>
-        <button
-          type="button"
-          className={p.faceCrop ? "chip on" : "chip"}
-          disabled={p.busy}
-          onClick={() => p.setFaceCrop((v) => !v)}
-        >
+        <button type="button" className={p.faceCrop ? "chip on" : "chip"} disabled={p.busy} onClick={() => p.setFaceCrop((v) => !v)}>
           <ScanFace size={12} /> Face crop
         </button>
-        <button
-          className="renderBtn"
-          onClick={p.onRender}
-          disabled={p.busy || !p.durations.length}
-          style={{ marginLeft: "auto" }}
-        >
+        {p.setGrade && (
+          <button type="button" className={p.grade ? "chip on" : "chip"} disabled={p.busy} onClick={() => p.setGrade((v) => !v)}>
+            Grade
+          </button>
+        )}
+        {p.setHookZoom && (
+          <button type="button" className={p.hookZoom ? "chip on" : "chip"} disabled={p.busy} onClick={() => p.setHookZoom((v) => !v)}>
+            Hook zoom
+          </button>
+        )}
+        <button className="renderBtn" onClick={p.onRender} disabled={p.busy || !p.durations.length} style={{ marginLeft: "auto" }}>
           Render {Math.max(1, Math.min(p.highlightCount, p.durations.length || 1))} clip(s)
         </button>
       </div>

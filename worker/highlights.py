@@ -1,7 +1,7 @@
 """Highlight detection engine (v0.8).
 
-Combines transcript signals with media signals and attaches an English
-social caption + hashtag pack for each ranked clip.
+Combines transcript signals with media signals and attaches English
+social caption packs for YouTube, Instagram and TikTok.
 """
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from dataclasses import dataclass, replace
 from typing import Iterable
 
 from social import caption as social_caption
+from social import platform_packs
 
 HOOK_PATTERNS = [
     r"\b(the secret|most important|here'?s why|here'?s how|nobody tells|the truth about)\b",
@@ -181,6 +182,7 @@ def find_highlights(
     for value, seg in chosen:
         title = _make_title(seg.text, value)
         pack = social_caption(title, seg.text, platform=platform)
+        packs = platform_packs(title, seg.text)
         results.append(
             {
                 "start": round(seg.start, 2),
@@ -193,6 +195,7 @@ def find_highlights(
                 "hashtags": pack["hashtags"],
                 "hashtag_line": pack["hashtag_line"],
                 "post": pack["post"],
+                "packs": packs,
                 "caption_language": "en",
                 "signals": {
                     "hook": round(

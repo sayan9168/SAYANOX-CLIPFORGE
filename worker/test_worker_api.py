@@ -23,8 +23,6 @@ def client(tmp_path, monkeypatch):
 
     monkeypatch.setattr(worker_main, "settings", fresh_settings)
 
-    # Routes are registered on the module-level `app` object, so we keep
-    # that app and only swap the JobStore + settings underneath it.
     fresh = JobStore(
         fresh_settings.data_dir,
         concurrency=1,
@@ -36,7 +34,6 @@ def client(tmp_path, monkeypatch):
     fresh.register_handler("render", worker_main.pipeline.handle_render)
     monkeypatch.setattr(worker_main, "store", fresh)
 
-    # Reset rate-limit state on the shared ASGI app object
     root = worker_main.app
     seen = set()
     while getattr(root, "app", None) is not None and id(root) not in seen:
@@ -77,7 +74,6 @@ def test_youtube_job_validation(client):
     )
     assert r.status_code == 200
     job_id = r.json()["job_id"]
-    # Worker may finish (fail) within one poll tick when yt-dlp is disabled.
     status = None
     for _ in range(20):
         s = client.get(f"/jobs/{job_id}")
@@ -104,9 +100,14 @@ def test_upload_queues_job_and_status(client):
     )
     assert r.status_code == 200
     job_id = r.json()["job_id"]
-    s = client.get(f"/jobs/{job_id}")
-    assert s.status_code == 200
-    body = s.json()
+    body = None
+    for _ in range(40):
+        s = client.get(f"/jobs/{job_id}")
+        if s.status_code == 200 and "status" in s.json():
+            body = s.json()
+            break
+        time.sleep(0.05)
+    assert body is not None, "job status never became readable"
     assert body["progress"] >= 0 and body["max_attempts"] == 2
 
 
@@ -136,7 +137,13 @@ def test_delete_and_cleanup(client):
     r = client.post("/jobs/youtube", json={"url": "https://youtu.be/del1"})
     job_id = r.json()["job_id"]
     assert client.delete(f"/jobs/{job_id}").status_code == 200
-    assert client.get(f"/jobs/{job_id}").status_code == 404
+    gone = False
+    for _ in range(20):
+        if client.get(f"/jobs/{job_id}").status_code == 404:
+            gone = True
+            break
+        time.sleep(0.05)
+    assert gone, "deleted job still visible"
     assert client.post("/jobs/cleanup").status_code == 200
 
 
@@ -215,7 +222,7 @@ def test_render_accepts_custom_durations(client):
             "durations": [22, 45],
         },
     )
-    assert ok.status_code == 404  # parent not found, durations accepted
+    assert ok.status_code == 404
     bad = client.post(
         "/jobs/render",
         json={

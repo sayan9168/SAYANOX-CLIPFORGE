@@ -1,8 +1,9 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Scissors, Sparkles, Upload, Clock3, Play, ShieldCheck, Zap,
-  Download, Loader2, Link2, Ratio, Type, Film,
+  Download, Loader2, Link2, Ratio, Type, Film, History, Trash2,
+  RotateCcw, Archive, X,
 } from "lucide-react";
 
 type DemoClip = { id: number; start: number; end: number; score: number; title: string; reason: string };
@@ -26,12 +27,34 @@ type JobStatus = {
 type Phase = "idle" | "analyzing" | "ready" | "rendering" | "done" | "error";
 type CaptionStyle = "default" | "karaoke" | "clean" | "bold";
 type Aspect = "9:16" | "1:1" | "16:9";
+type HistoryItem = {
+  id: string;
+  kind: "analyze" | "render" | "upload";
+  label: string;
+  status: string;
+  at: number;
+  parent?: string;
+};
 
-const demo: DemoClip[] = [
-  { id: 1, start: 873, end: 907, score: 92, title: "The strongest moment", reason: "Clear hook, complete thought and high information density." },
-  { id: 2, start: 1142, end: 1175, score: 88, title: "Key insight", reason: "Self-contained statement with a natural ending." },
-  { id: 3, start: 1540, end: 1571, score: 84, title: "Best reaction", reason: "Strong emotional/audio peak and clean context." },
-];
+const HISTORY_KEY = "clipforge-history-v1";
+const MAX_HISTORY = 20;
+
+function loadHistory(): HistoryItem[] {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    return raw ? (JSON.parse(raw) as HistoryItem[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveHistory(items: HistoryItem[]) {
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(items.slice(0, MAX_HISTORY)));
+  } catch {
+    /* ignore quota */
+  }
+}
 
 function fmt(s: number) {
   const h = Math.floor(s / 3600),
@@ -51,22 +74,36 @@ export default function Home() {
   const [rendered, setRendered] = useState<RenderClip[]>([]);
   const [renderJob, setRenderJob] = useState("");
   const [durations, setDurations] = useState<number[]>([30]);
+  const [customDur, setCustomDur] = useState("");
   const [captionStyle, setCaptionStyle] = useState<CaptionStyle>("default");
   const [aspect, setAspect] = useState<Aspect>("9:16");
   const [burnCaptions, setBurnCaptions] = useState(true);
   const [note, setNote] = useState("");
   const [mode, setMode] = useState<"url" | "upload">("url");
+  const [fileName, setFileName] = useState("");
+  const [dragOver, setDragOver] = useState(false);
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
+  const fileRef = useRef<HTMLInputElement | null>(null);
   const analyzeJob = useRef("");
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const renderTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    setHistory(loadHistory());
+    return () => {
       if (pollTimer.current) clearInterval(pollTimer.current);
       if (renderTimer.current) clearInterval(renderTimer.current);
-    },
-    [],
-  );
+    };
+  }, []);
+
+  const pushHistory = useCallback((item: HistoryItem) => {
+    setHistory((prev) => {
+      const next = [item, ...prev.filter((h) => h.id !== item.id)].slice(0, MAX_HISTORY);
+      saveHistory(next);
+      return next;
+    });
+  }, []);
 
   function stopPoll(kind: "analyze" | "render") {
     const t = kind === "analyze" ? pollTimer : renderTimer;
@@ -74,6 +111,51 @@ export default function Home() {
       clearInterval(t.current);
       t.current = null;
     }
+  }
+
+  function pollAnalyze(jobId: string) {
+    analyzeJob.current = jobId;
+    pollTimer.current = setInterval(async () => {
+      try {
+        const s = await fetch(`/api/jobs/status?job=${jobId}`, { cache: "no-store" });
+        const j: JobStatus = await s.json();
+        if (!s.ok) throw new Error((j as any)?.error || "Job lookup failed.");
+        setProgress(j.progress ?? 0);
+        if (j.status === "completed") {
+          stopPoll("analyze");
+          const clips = (j.result?.clips || []) as Highlight[];
+          setHighlights(clips);
+          setRendered([]);
+          setNote(
+            `Analyzed ${j.result?.duration ? fmt(j.result.duration) : "video"} • engine: ${j.result?.engine || "?"} • ${j.result?.transcript_segments ?? 0} transcript segments • ${j.result?.scene_changes ?? 0} scene changes`,
+          );
+          setPhase(clips.length ? "ready" : "error");
+          if (!clips.length) setError("No highlights found in this video.");
+          pushHistory({
+            id: jobId,
+            kind: "analyze",
+            label: url || fileName || jobId.slice(0, 8),
+            status: "completed",
+            at: Date.now(),
+          });
+        } else if (j.status === "failed") {
+          stopPoll("analyze");
+          setPhase("error");
+          setError(j.error || "Worker job failed.");
+          pushHistory({
+            id: jobId,
+            kind: "analyze",
+            label: url || fileName || jobId.slice(0, 8),
+            status: "failed",
+            at: Date.now(),
+          });
+        }
+      } catch (e) {
+        stopPoll("analyze");
+        setPhase("error");
+        setError(e instanceof Error ? e.message : "Lost contact with the worker.");
+      }
+    }, 1500);
   }
 
   async function analyze() {
@@ -113,38 +195,52 @@ export default function Home() {
         setPhase("ready");
         return;
       }
-      analyzeJob.current = d.job_id;
-      pollTimer.current = setInterval(async () => {
-        try {
-          const s = await fetch(`/api/jobs/status?job=${analyzeJob.current}`, { cache: "no-store" });
-          const j: JobStatus = await s.json();
-          if (!s.ok) throw new Error((j as any)?.error || "Job lookup failed.");
-          setProgress(j.progress ?? 0);
-          if (j.status === "completed") {
-            stopPoll("analyze");
-            const clips = (j.result?.clips || []) as Highlight[];
-            setHighlights(clips);
-            setRendered([]);
-            setNote(
-              `Analyzed ${j.result?.duration ? fmt(j.result.duration) : "video"} • engine: ${j.result?.engine || "?"} • ${j.result?.transcript_segments ?? 0} transcript segments • ${j.result?.scene_changes ?? 0} scene changes`,
-            );
-            setPhase(clips.length ? "ready" : "error");
-            if (!clips.length) setError("No highlights found in this video.");
-          } else if (j.status === "failed") {
-            stopPoll("analyze");
-            setPhase("error");
-            setError(j.error || "Worker job failed.");
-          }
-        } catch (e) {
-          stopPoll("analyze");
-          setPhase("error");
-          setError(e instanceof Error ? e.message : "Lost contact with the worker.");
-        }
-      }, 1500);
+      pollAnalyze(d.job_id);
     } catch (e) {
       setPhase("error");
       setError(e instanceof Error ? e.message : "Analysis failed.");
     }
+  }
+
+  async function uploadFile(file: File) {
+    setError("");
+    stopPoll("analyze");
+    stopPoll("render");
+    setHighlights([]);
+    setRendered([]);
+    setNote("");
+    setRenderJob("");
+    setFileName(file.name);
+    setPhase("analyzing");
+    setProgress(0);
+    try {
+      const fd = new FormData();
+      fd.append("video", file);
+      fd.append("min_seconds", "15");
+      fd.append("max_seconds", "90");
+      fd.append("limit", "8");
+      const r = await fetch("/api/jobs/upload", { method: "POST", body: fd });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || d.detail || "Upload failed.");
+      pollAnalyze(d.job_id);
+      pushHistory({
+        id: d.job_id,
+        kind: "upload",
+        label: file.name,
+        status: "queued",
+        at: Date.now(),
+      });
+    } catch (e) {
+      setPhase("error");
+      setError(e instanceof Error ? e.message : "Upload failed.");
+    }
+  }
+
+  function onDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setDragOver(false);
+    const f = e.dataTransfer.files?.[0];
+    if (f) uploadFile(f);
   }
 
   async function render() {
@@ -181,6 +277,14 @@ export default function Home() {
             stopPoll("render");
             setRendered((j.result?.clips || []) as RenderClip[]);
             setPhase("done");
+            pushHistory({
+              id: d.job_id,
+              kind: "render",
+              label: `Render ${picks.length} clip(s)`,
+              status: "completed",
+              at: Date.now(),
+              parent: analyzeJob.current,
+            });
           } else if (j.status === "failed") {
             stopPoll("render");
             setPhase("error");
@@ -198,9 +302,48 @@ export default function Home() {
     }
   }
 
+  async function retryJob(id: string) {
+    setError("");
+    try {
+      const r = await fetch(`/api/jobs/retry?job=${id}`, { method: "POST" });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || "Retry failed.");
+      setPhase("analyzing");
+      setProgress(0);
+      pollAnalyze(id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Retry failed.");
+    }
+  }
+
+  async function deleteJob(id: string) {
+    try {
+      await fetch(`/api/jobs/delete?job=${id}`, { method: "DELETE" });
+      setHistory((prev) => {
+        const next = prev.filter((h) => h.id !== id);
+        saveHistory(next);
+        return next;
+      });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function addCustomDuration() {
+    const n = parseInt(customDur, 10);
+    if (!Number.isFinite(n) || n < 5 || n > 180) {
+      setError("Custom duration must be 5–180 seconds.");
+      return;
+    }
+    setError("");
+    setDurations((v) => (v.includes(n) ? v : [...v, n].sort((a, b) => a - b)));
+    setCustomDur("");
+  }
+
   const busy = phase === "analyzing" || phase === "rendering";
   const clipSrc = (c: RenderClip) =>
     `/api/jobs/files?job=${renderJob}&path=${encodeURIComponent("clips/" + c.file)}`;
+  const zipHref = renderJob ? `/api/jobs/zip?job=${renderJob}` : "";
 
   return (
     <main>
@@ -209,11 +352,50 @@ export default function Home() {
           <Scissors size={18} />
           SAYANOX <span>CLIPFORGE</span>
         </div>
-        <div className="status">
-          <i />
-          v0.6 • Whisper + FFmpeg • Real pipeline
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <button type="button" className="tab" onClick={() => setShowHistory((v) => !v)}>
+            <History size={13} /> History
+          </button>
+          <div className="status">
+            <i />
+            v0.7 • Phase 1
+          </div>
         </div>
       </nav>
+
+      {showHistory && (
+        <div className="historyPanel">
+          <div className="resultHead">
+            <h2 style={{ fontSize: 18, margin: 0 }}>Recent jobs</h2>
+            <button type="button" className="chip" onClick={() => setShowHistory(false)}>
+              <X size={12} /> Close
+            </button>
+          </div>
+          {history.length === 0 && <p className="hint">No jobs yet.</p>}
+          <ul className="historyList">
+            {history.map((h) => (
+              <li key={h.id + h.at}>
+                <div>
+                  <b>{h.label}</b>
+                  <small>
+                    {h.kind} · {h.status} · {new Date(h.at).toLocaleString()}
+                  </small>
+                </div>
+                <div className="historyActions">
+                  {(h.status === "failed" || h.status === "queued") && (
+                    <button type="button" className="chip" onClick={() => retryJob(h.id)} disabled={busy}>
+                      <RotateCcw size={12} /> Retry
+                    </button>
+                  )}
+                  <button type="button" className="chip" onClick={() => deleteJob(h.id)}>
+                    <Trash2 size={12} /> Delete
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <section className="hero">
         <div className="eyebrow">
@@ -225,8 +407,8 @@ export default function Home() {
           <em>great clips.</em>
         </h1>
         <p className="sub">
-          Paste a video URL. ClipForge queues a real worker job: download → Whisper transcription →
-          audio &amp; scene analysis → highlight scoring → rendered clips you can preview and download.
+          Paste a URL or drop a file. ClipForge queues a real worker job: transcribe → score highlights →
+          render vertical clips with captions.
         </p>
 
         <div className="panel">
@@ -262,17 +444,32 @@ export default function Home() {
               </button>
             </div>
           ) : (
-            <div className="inputRow">
-              <Upload size={16} />
+            <div
+              className={`dropzone${dragOver ? " over" : ""}`}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragOver(true);
+              }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={onDrop}
+              onClick={() => fileRef.current?.click()}
+            >
+              <Upload size={22} />
+              <div>
+                <b>{fileName || "Drop video here or click to browse"}</b>
+                <small>MP4, MOV, MKV, WebM · requires WORKER_API_URL</small>
+              </div>
               <input
-                type="text"
-                readOnly
-                value="File upload via worker /jobs/upload — connect WORKER_API_URL and use API or future drag-drop"
-                disabled
+                ref={fileRef}
+                type="file"
+                accept="video/*,audio/*"
+                hidden
+                disabled={busy}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) uploadFile(f);
+                }}
               />
-              <button disabled title="Use worker upload endpoint for now">
-                Coming soon
-              </button>
             </div>
           )}
 
@@ -298,13 +495,13 @@ export default function Home() {
           </div>
           <div>
             <Clock3 size={18} />
-            <b>15–90 sec</b>
-            <small>Pick lengths that fit Shorts, Reels, TikTok or YouTube</small>
+            <b>Custom 5–180s</b>
+            <small>Presets or type any length that fits your platform</small>
           </div>
           <div>
             <Film size={18} />
-            <b>Real MP4 clips</b>
-            <small>FFmpeg render · vertical crop · burned captions · download</small>
+            <b>ZIP + MP4</b>
+            <small>Preview, single download, or bulk ZIP of all clips</small>
           </div>
         </div>
 
@@ -338,6 +535,20 @@ export default function Home() {
                   {d}s
                 </button>
               ))}
+              <input
+                className="customDur"
+                type="number"
+                min={5}
+                max={180}
+                placeholder="custom"
+                value={customDur}
+                disabled={busy}
+                onChange={(e) => setCustomDur(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && addCustomDuration()}
+              />
+              <button type="button" className="chip" disabled={busy} onClick={addCustomDuration}>
+                Add
+              </button>
 
               <span className="optLabel" style={{ marginLeft: 8 }}>
                 <Ratio size={13} /> Aspect
@@ -432,7 +643,14 @@ export default function Home() {
                 <span className="eyebrow">GENERATED CLIPS</span>
                 <h2>Ready to preview &amp; download</h2>
               </div>
-              <span>{rendered.length} MP4s</span>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <span>{rendered.length} MP4s</span>
+                {zipHref && (
+                  <a href={zipHref} className="dl" download>
+                    <Archive size={13} /> Download ZIP
+                  </a>
+                )}
+              </div>
             </div>
             <div className="grid">
               {rendered.map((c) => (
@@ -461,7 +679,7 @@ export default function Home() {
         )}
       </section>
 
-      <footer>SAYANOX CLIPFORGE • Built for creators • v0.6.0</footer>
+      <footer>SAYANOX CLIPFORGE • Built for creators • v0.7.0 Phase 1</footer>
     </main>
   );
 }

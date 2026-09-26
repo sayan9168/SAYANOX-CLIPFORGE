@@ -94,6 +94,15 @@ nav{
 .renderBtn:hover:not(:disabled){filter:brightness(1.08)}
 .inputRow button:disabled,
 .renderBtn:disabled{opacity:.55;cursor:not-allowed}
+.dropzone{
+  border:1px dashed #3a4250;border-radius:12px;padding:28px 16px;
+  display:flex;flex-direction:column;align-items:center;gap:10px;
+  cursor:pointer;color:var(--muted);background:#0a0c10;
+  transition:border-color .15s,background .15s;
+}
+.dropzone.over{border-color:var(--accent);background:#12180e}
+.dropzone b{display:block;color:var(--text);font-size:14px}
+.dropzone small{font-size:12px;color:var(--muted)}
 .hint{
   color:#5c6573;font-size:11px;display:flex;
   justify-content:center;align-items:center;gap:6px;padding-top:12px;
@@ -148,8 +157,13 @@ nav{
 .chip{
   border:1px solid var(--line);background:transparent;color:var(--muted);
   font-size:12px;font-weight:700;padding:6px 11px;border-radius:8px;cursor:pointer;
+  display:inline-flex;align-items:center;gap:4px;
 }
 .chip.on{background:#1a2214;border-color:#3a4a22;color:var(--accent)}
+.customDur{
+  width:72px;background:#0a0c10;border:1px solid var(--line);border-radius:8px;
+  color:var(--text);padding:6px 8px;font-size:12px;
+}
 .clip{
   display:flex;gap:16px;padding:16px 0;
   border-bottom:1px solid #181b22;
@@ -174,9 +188,7 @@ nav{
 }
 .clipBody p{color:var(--muted);font-size:13px;margin:6px 0;line-height:1.45}
 .clipBody code{color:#9aa3b0;font-size:11px}
-.signals{
-  display:flex;flex-wrap:wrap;gap:5px;margin-top:8px;
-}
+.signals{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
 .sig{
   font-size:10px;font-weight:700;padding:3px 7px;border-radius:6px;
   background:#141820;color:#8b93a3;border:1px solid #22262f;
@@ -205,6 +217,18 @@ nav{
 .dl.ghost{
   background:transparent;border:1px solid var(--line);color:var(--muted);
 }
+.historyPanel{
+  background:var(--panel);border:1px solid var(--line);border-radius:14px;
+  padding:16px;margin-bottom:24px;text-align:left;
+}
+.historyList{list-style:none;margin:12px 0 0;padding:0}
+.historyList li{
+  display:flex;justify-content:space-between;align-items:center;gap:12px;
+  padding:10px 0;border-bottom:1px solid #181b22;
+}
+.historyList b{display:block;font-size:13px}
+.historyList small{color:var(--muted);font-size:11px}
+.historyActions{display:flex;gap:6px;flex-shrink:0}
 footer{
   text-align:center;color:#434952;font-size:10px;
   letter-spacing:.12em;padding:56px 0 12px;text-transform:uppercase;
@@ -221,4 +245,5 @@ footer{
   .features{grid-template-columns:1fr}
   .thumb{width:110px;height:72px}
   .clip{flex-direction:column;gap:10px}
+  .historyList li{flex-direction:column;align-items:flex-start}
 }

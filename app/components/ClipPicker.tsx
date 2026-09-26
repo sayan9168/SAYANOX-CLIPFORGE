@@ -17,6 +17,16 @@ function fmt(s: number) {
   return String(m).padStart(2, "0") + ":" + String(sec).padStart(2, "0");
 }
 
+function lastAnalyzeJob(): string {
+  try {
+    const raw = localStorage.getItem("clipforge-history-v1");
+    const items = raw ? JSON.parse(raw) as { id: string; kind: string }[] : [];
+    return items.find((h) => h.kind === "analyze" || h.kind === "upload")?.id || "";
+  } catch {
+    return "";
+  }
+}
+
 export function ClipPicker({
   clips, selected, setSelected, trims, setTrims, platform, busy, jobId,
 }: {
@@ -31,6 +41,7 @@ export function ClipPicker({
 }) {
   const [open, setOpen] = useState<number | null>(null);
   const vids = useRef<Record<number, HTMLVideoElement | null>>({});
+  const previewJob = jobId || lastAnalyzeJob();
 
   function toggle(i: number) {
     const next = selected.slice();
@@ -94,7 +105,7 @@ export function ClipPicker({
                   <code>{fmt(t1 - t0)}</code>
                 </div>
               </div>
-              {jobId && (
+              {previewJob && (
                 <div className="previewBox">
                   <button type="button" className="chip" disabled={busy} onClick={() => playPreview(i)}>
                     Preview trim
@@ -102,16 +113,11 @@ export function ClipPicker({
                   {open === i && (
                     <video
                       ref={(el) => { vids.current[i] = el; }}
-                      src={`/api/jobs/files?job=${jobId}&path=${encodeURIComponent("source.mp4")}`}
+                      src={`/api/jobs/files?job=${previewJob}&path=${encodeURIComponent("source.mp4")}`}
                       controls
-                      onLoadedMetadata={(e) => {
-                        const el = e.currentTarget;
-                        el.currentTime = t0;
-                      }}
+                      onLoadedMetadata={(e) => { e.currentTarget.currentTime = t0; }}
                       onTimeUpdate={(e) => {
-                        if (e.currentTarget.currentTime >= t1) {
-                          e.currentTarget.pause();
-                        }
+                        if (e.currentTarget.currentTime >= t1) e.currentTarget.pause();
                       }}
                     />
                   )}

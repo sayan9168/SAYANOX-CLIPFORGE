@@ -1,0 +1,15 @@
+# Termux / Android (aarch64) — install with:
+#   export ANDROID_API_LEVEL=24
+#   pip install -r requirements-termux.txt
+#
+# Use system Python from Termux (3.12–3.14). pydantic>=2.12 is required for 3.14.
+
+fastapi>=0.115.6,<0.120
+uvicorn[standard]>=0.34.0,<0.40
+python-multipart>=0.0.20
+pydantic>=2.12.0,<3
+httpx>=0.28.1,<0.29
+
+# Optional (heavy on phone — install only if needed):
+# yt-dlp
+# openai-whisper

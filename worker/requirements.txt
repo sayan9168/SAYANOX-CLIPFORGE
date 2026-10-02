@@ -1,10 +1,11 @@
-fastapi==0.115.6
-uvicorn[standard]==0.34.0
-python-multipart==0.0.20
-pydantic==2.10.4
-httpx==0.28.1
-pytest==8.3.4
-# --- real transcription (heavy; commented out so lightweight CI stays fast).
-# Uncomment in production images or pass an extra -r requirements-ml.txt:
-# faster-whisper==1.1.1
-# yt-dlp==2025.6.9
+fastapi>=0.115.6,<0.120
+uvicorn[standard]>=0.34.0,<0.40
+python-multipart>=0.0.20
+# 2.12+ ships pydantic-core with Python 3.14 / newer PyO3 (needed on Termux rolling Python)
+pydantic>=2.12.0,<3
+httpx>=0.28.1,<0.29
+pytest>=8.3.4,<9
+# Optional ML (install separately on device with RAM to spare):
+# faster-whisper
+# openai-whisper
+# yt-dlp

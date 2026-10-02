@@ -64,8 +64,30 @@ def probe(path: Path) -> dict:
 
 
 def extract_audio(source: Path, target: Path) -> Path:
-    run_ffmpeg("-i", str(source), "-vn", "-ac", "1", "-ar", "16000",
-               "-c:a", "pcm_s16le", str(target))
+    """Extract mono 16 kHz WAV. If source has no audio, write silence of same duration."""
+    info = probe(source)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if info.get("has_audio"):
+        try:
+            run_ffmpeg(
+                "-i", str(source),
+                "-vn", "-map", "0:a:0",
+                "-ac", "1", "-ar", "16000",
+                "-c:a", "pcm_s16le",
+                str(target),
+            )
+            if target.is_file() and target.stat().st_size > 44:
+                return target
+        except RuntimeError:
+            pass
+    # No usable audio — synthetic silence so analyze can continue (Termux / video-only).
+    dur = max(1.0, float(info.get("duration") or 30.0))
+    run_ffmpeg(
+        "-f", "lavfi", "-i", "anullsrc=r=16000:cl=mono",
+        "-t", f"{dur:.3f}",
+        "-c:a", "pcm_s16le",
+        str(target),
+    )
     return target
 
 
@@ -153,7 +175,6 @@ def face_center_x(source: Path, start: float, end: float, samples: int = 6) -> f
         faces = cascade.detectMultiScale(gray, 1.2, 4, minSize=(40, 40))
         if len(faces) == 0:
             continue
-        # largest face
         x, y, fw, fh = max(faces, key=lambda f: f[2] * f[3])
         xs.append((x + fw / 2) / w)
     cap.release()
@@ -171,14 +192,10 @@ def mix_bgm(
     bgm_vol: float = 0.18,
     duck: bool = True,
 ) -> Path:
-    """Mix background music under speech. Optional sidechain-style ducking via
-    volume envelopes (lightweight, no sidechaincompress dependency)."""
     if not bgm.is_file():
         shutil.copy(video, dest)
         return dest
-    # Loop BGM to video length; lower BGM; keep speech dominant
     if duck:
-        # speech full, BGM quieter — approximate duck by fixed low bed
         af = (
             f"[1:a]volume={bgm_vol},aloop=loop=-1:size=2e+09,aformat=fltp[bg];"
             f"[0:a]volume={speech_vol}[sp];"
@@ -217,17 +234,32 @@ def download_youtube(url: str, work: Path) -> tuple[Path, dict]:
     if meta_p.returncode:
         raise RuntimeError(f"yt-dlp metadata failed: {meta_p.stderr[-500:]}")
     meta = json.loads(meta_p.stdout)
+    # Prefer merged A+V; avoid video-only files that break extract_audio.
     p = subprocess.run(
-        ["yt-dlp", "--no-warnings", "-f", "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b",
-         "--merge-output-format", "mp4", "-o", str(work / "source.%(ext)s"), url],
+        [
+            "yt-dlp", "--no-warnings",
+            "-f", "bv*[height<=720]+ba/b[height<=720]/b",
+            "--merge-output-format", "mp4",
+            "--no-playlist",
+            "-o", str(work / "source.%(ext)s"),
+            url,
+        ],
         capture_output=True, text=True, timeout=7200,
     )
     src = work / "source.mp4"
     if not src.is_file():
-        cands = sorted(work.glob("source.*"))
+        cands = [c for c in sorted(work.glob("source.*")) if c.suffix.lower() != ".json"]
         if not cands:
-            raise RuntimeError(f"yt-dlp download failed: {p.stderr[-500:]}")
+            raise RuntimeError(f"yt-dlp download failed: {(p.stderr or p.stdout)[-800:]}")
         src = cands[0]
+    if src.suffix.lower() not in (".mp4", ".m4v") or not probe(src).get("has_audio"):
+        fixed = work / "source.mp4"
+        try:
+            run_ffmpeg("-i", str(src), "-c", "copy", "-movflags", "+faststart", str(fixed))
+            if fixed.is_file():
+                src = fixed
+        except RuntimeError:
+            pass
     return src, meta
 
 

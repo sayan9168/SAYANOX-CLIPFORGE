@@ -1,63 +1,64 @@
-"""Extra FastAPI routes mounted once at JobStore.start()."""
+"""Optional routes registered once, without capturing a stale JobStore."""
 from __future__ import annotations
 
-_mounted = False
+from fastapi import Depends, HTTPException, Request
+from pydantic import ValidationError
+
+from projects import delete_project, get_project, list_projects, save_project
+from stock_bgm import ensure_stock
+from translate import pack, translate
 
 
-def mount() -> None:
-    global _mounted
-    if _mounted:
-        return
-    try:
-        import main as m
-        from fastapi import Depends, Request
-        from config import settings
-        from projects import list_projects, save_project
-        from stock_bgm import ensure_stock
-        from translate import pack, translate
-    except Exception:
-        return
+def mount(app, get_store, require_token) -> None:
+    dependencies = [Depends(require_token)]
 
-    app = getattr(m, "app", None)
-    store = getattr(m, "store", None)
-    require_token = getattr(m, "require_token", None)
-    if app is None or store is None:
-        return
+    def workspace(request: Request) -> str:
+        return request.headers.get("x-clipforge-user") or "local"
 
-    deps = [Depends(require_token)] if require_token else []
-
-    @app.get("/jobs", dependencies=deps)
-    def jobs_list(limit: int = 50):
-        rows = []
-        for j in store.list(max(1, min(200, int(limit)))):
-            rows.append({
-                "id": j.get("id"), "kind": j.get("kind"), "status": j.get("status"),
-                "progress": j.get("progress"), "error": j.get("error"),
-            })
-        return {"jobs": rows}
-
-    @app.get("/projects", dependencies=deps)
+    @app.get("/projects", dependencies=dependencies)
     def projects_get(request: Request):
-        token = request.headers.get("x-clipforge-user") or "local"
-        return {"projects": list_projects(settings.data_dir, token)}
+        try:
+            return {"projects": list_projects(get_store().root, workspace(request))}
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from error
 
-    @app.post("/projects", dependencies=deps)
-    async def projects_post(request: Request):
-        token = request.headers.get("x-clipforge-user") or "local"
-        body = await request.json()
-        return save_project(settings.data_dir, token, body if isinstance(body, dict) else {})
+    @app.post("/projects", dependencies=dependencies)
+    def projects_post(request: Request, body: dict):
+        try:
+            return save_project(get_store().root, workspace(request), body)
+        except ValidationError as error:
+            raise HTTPException(400, "; ".join(item["msg"] for item in error.errors(include_context=False)[:5])) from error
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from error
 
-    @app.post("/translate", dependencies=deps)
-    async def translate_post(request: Request):
-        body = await request.json()
-        text = str((body or {}).get("text") or "")
-        target = str((body or {}).get("target") or "bn")
-        source = str((body or {}).get("source") or "en")
+    @app.get("/projects/{project_id}", dependencies=dependencies)
+    def projects_one(project_id: str, request: Request):
+        try:
+            project = get_project(get_store().root, workspace(request), project_id)
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from error
+        if not project:
+            raise HTTPException(404, "Project not found in this workspace.")
+        return project
+
+    @app.delete("/projects/{project_id}", dependencies=dependencies)
+    def projects_delete(project_id: str, request: Request):
+        try:
+            deleted = delete_project(get_store().root, workspace(request), project_id)
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from error
+        if not deleted:
+            raise HTTPException(404, "Project not found in this workspace.")
+        return {"deleted": project_id}
+
+    @app.post("/translate", dependencies=dependencies)
+    def translate_post(body: dict):
+        text = str(body.get("text") or "")
+        if len(text) > 10000:
+            raise HTTPException(400, "Translation text must be at most 10,000 characters.")
+        target, source = str(body.get("target") or "bn"), str(body.get("source") or "en")
         return {"text": translate(text, target, source), "pack": pack(text)}
 
-    @app.get("/stock-bgm", dependencies=deps)
+    @app.get("/stock-bgm", dependencies=dependencies)
     def stock_bgm():
-        tracks = ensure_stock(settings.data_dir)
-        return {"tracks": list(tracks)}
-
-    _mounted = True
+        return {"tracks": list(ensure_stock(get_store().root))}

@@ -2,8 +2,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+import threading
+
+from execution import check_cancelled
 
 import media
+
+_LOCK = threading.RLock()
 
 PRESETS = {
     "soft": "sine=frequency=220:sample_rate=44100,volume=0.08",
@@ -13,6 +18,12 @@ PRESETS = {
 
 
 def ensure_stock(root: Path) -> dict[str, Path]:
+    with _LOCK:
+        check_cancelled()
+        return _ensure_stock(root)
+
+
+def _ensure_stock(root: Path) -> dict[str, Path]:
     dest = Path(root) / "stock"
     dest.mkdir(parents=True, exist_ok=True)
     out: dict[str, Path] = {}
@@ -25,6 +36,8 @@ def ensure_stock(root: Path) -> dict[str, Path]:
                     timeout=30,
                 )
             except Exception:
+                check_cancelled()
+                wav.unlink(missing_ok=True)
                 continue
         if wav.is_file():
             out[name] = wav

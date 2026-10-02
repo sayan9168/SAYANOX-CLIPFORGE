@@ -1,9 +1,19 @@
+# Standalone private worker. Prefer ../compose.yaml for the complete studio.
 services:
   clipforge-worker:
     build: .
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
+    environment:
+      WORKER_API_TOKEN: ${WORKER_API_TOKEN:?Set a private WORKER_API_TOKEN in .env}
+      CLIPFORGE_DATA: /data
+      HF_HOME: /data/models
+      WHISPER_MODEL: ${WHISPER_MODEL:-tiny}
+      WHISPER_DEVICE: cpu
+      WHISPER_COMPUTE_TYPE: int8
+      CLIPFORGE_ALLOW_YTDLP: ${CLIPFORGE_ALLOW_YTDLP:-false}
     volumes:
       - clipforge-data:/data
+    restart: unless-stopped
 volumes:
   clipforge-data:

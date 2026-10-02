@@ -17,7 +17,7 @@ def wait(store, job_id, timeout=5.0):
     deadline = time.time() + timeout
     while time.time() < deadline:
         job = store.get(job_id)
-        if job and job["status"] in ("completed", "failed"):
+        if job and job["status"] in ("completed", "failed", "cancelled"):
             return job
         time.sleep(0.05)
     raise AssertionError("job did not finish")

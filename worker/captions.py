@@ -1,6 +1,7 @@
 """Automatic captions: Whisper timestamps -> styled ASS subtitle track."""
 from __future__ import annotations
 
+import math
 import textwrap
 from pathlib import Path
 
@@ -35,10 +36,57 @@ CAPTION_STYLES = tuple(STYLES.keys())
 
 
 def _ts(t: float) -> str:
-    h = int(t // 3600)
-    m = int((t % 3600) // 60)
-    s = t % 60
-    return f"{h}:{m:02d}:{s:05.2f}"
+    value = max(0, round(t * 100))
+    hours, value = divmod(value, 360000)
+    minutes, value = divmod(value, 6000)
+    seconds, fraction = divmod(value, 100)
+    return f"{hours}:{minutes:02d}:{seconds:02d}.{fraction:02d}"
+
+
+def _subtitle_ts(t: float, separator: str = ",") -> str:
+    value = max(0, round(t * 1000))
+    hours, value = divmod(value, 3600000)
+    minutes, value = divmod(value, 60000)
+    seconds, fraction = divmod(value, 1000)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}{separator}{fraction:03d}"
+
+
+def valid_segments(segments: list[dict]) -> list[dict]:
+    result = []
+    for segment in segments:
+        try:
+            start, end = float(segment["start"]), float(segment["end"])
+            text = " ".join(str(segment.get("text", "")).split())
+            if not math.isfinite(start) or not math.isfinite(end) or end <= max(0, start) or not text:
+                continue
+            result.append({"start": max(0, start), "end": end, "text": text})
+        except (KeyError, TypeError, ValueError):
+            continue
+    return sorted(result, key=lambda segment: segment["start"])
+
+
+def trim_segments(segments: list[dict], start: float, end: float) -> list[dict]:
+    return [{"start": max(start, segment["start"]) - start,
+             "end": min(end, segment["end"]) - start, "text": segment["text"]}
+            for segment in valid_segments(segments) if segment["end"] > start and segment["start"] < end]
+
+
+def segments_to_srt(segments: list[dict]) -> str:
+    return "\n\n".join(
+        f"{index}\n{_subtitle_ts(segment['start'])} --> {_subtitle_ts(segment['end'])}\n{segment['text']}"
+        for index, segment in enumerate(valid_segments(segments), 1)
+    ) + "\n"
+
+
+def segments_to_vtt(segments: list[dict]) -> str:
+    return "WEBVTT\n\n" + "\n\n".join(
+        f"{_subtitle_ts(segment['start'], '.')} --> {_subtitle_ts(segment['end'], '.')}\n{segment['text']}"
+        for segment in valid_segments(segments)
+    ) + "\n"
+
+
+def _ass_text(text: str) -> str:
+    return text.replace("\\", "/").replace("{", "(").replace("}", ")")
 
 
 def segments_to_ass(
@@ -52,6 +100,9 @@ def segments_to_ass(
 ) -> str:
     st = STYLES.get(style, STYLES["default"])
     width = max_chars if max_chars is not None else int(st.get("max_chars", 42))
+    font_size = round(int(st["fontsize"]) * play_res_y / 640)
+    margin = round(int(st["marginv"]) * play_res_y / 640)
+    hook_size = round(42 * play_res_y / 1280)
     hook_font = "Arial Black" if style not in ("bengali", "hindi") else st["fontname"]
     lines = [
         "[Script Info]",
@@ -65,11 +116,11 @@ def segments_to_ass(
         "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
         "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
         (
-            f"Style: Cap,{st['fontname']},{st['fontsize']},{st['primary']},&H000000FF,"
-            f"{st['outline']},&H80000000,{st['bold']},0,0,0,100,100,0,0,1,3,1,2,20,20,{st['marginv']},1"
+            f"Style: Cap,{st['fontname']},{font_size},{st['primary']},&H000000FF,"
+            f"{st['outline']},&H80000000,{st['bold']},0,0,0,100,100,0,0,1,3,1,2,20,20,{margin},1"
         ),
         (
-            f"Style: Hook,{hook_font},42,&H0000FFFF,&H000000FF,"
+            f"Style: Hook,{hook_font},{hook_size},&H0000FFFF,&H000000FF,"
             f"&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,4,2,8,40,40,80,1"
         ),
         "",
@@ -78,13 +129,13 @@ def segments_to_ass(
     ]
     hook = " ".join(str(hook_text or "").split())
     if hook:
-        safe_hook = hook.replace("{", "(").replace("}", ")")
+        safe_hook = _ass_text(hook)
         if len(safe_hook) > 48:
             safe_hook = safe_hook[:45] + "..."
         lines.append(
             f"Dialogue: 1,0:00:00.00,{_ts(max(0.6, hook_seconds))},Hook,,0,0,0,,{safe_hook}"
         )
-    for seg in segments:
+    for seg in valid_segments(segments):
         start = max(0.0, float(seg["start"]))
         end = max(start + 0.2, float(seg["end"]))
         text = " ".join(str(seg.get("text", "")).split())
@@ -93,7 +144,7 @@ def segments_to_ass(
         chunks = textwrap.wrap(text, width=width) or [text]
         span = (end - start) / len(chunks)
         for i, chunk in enumerate(chunks):
-            safe = chunk.replace("{", "(").replace("}", ")")
+            safe = _ass_text(chunk)
             lines.append(
                 f"Dialogue: 0,{_ts(start + i * span)},{_ts(start + (i + 1) * span)},"
                 f"Cap,,0,0,0,,{safe}"

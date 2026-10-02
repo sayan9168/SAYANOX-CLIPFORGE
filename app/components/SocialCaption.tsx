@@ -1,5 +1,5 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Copy, Check } from "lucide-react";
 
 export type SocialPack = {
@@ -92,20 +92,26 @@ export function SocialCaption({
   const [tab, setTab] = useState<PlatformKey>(initialP);
   const [lang, setLang] = useState<LangKey>("en");
   const [copied, setCopied] = useState("");
+  const [copyError, setCopyError] = useState("");
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => { setTab(initialP); }, [initialP]);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
 
   const post = useMemo(() => {
     return languages?.[lang]?.[tab]?.post
       || (lang === "en" ? packs?.[tab]?.post : undefined)
-      || pack?.post
+      || (lang === "en" ? pack?.post : undefined)
       || fallbackPost(title, text, tab, lang);
   }, [languages, lang, tab, packs, pack, title, text]);
 
   async function copy() {
     try {
+      setCopyError("");
       await navigator.clipboard.writeText(post);
       setCopied(`${lang}-${tab}`);
-      setTimeout(() => setCopied(""), 1500);
-    } catch {}
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = setTimeout(() => setCopied(""), 1500);
+    } catch { setCopyError("Clipboard is unavailable. Select the caption text and copy it manually."); }
   }
 
   return (
@@ -130,6 +136,8 @@ export function SocialCaption({
         ))}
       </div>
       <pre>{post}</pre>
+      {lang !== "en" && !languages?.[lang]?.[tab]?.post && <small className="timingHint">The call-to-action is localized; the hook stays in the source language.</small>}
+      {copyError && <p className="warning" role="status">{copyError}</p>}
     </div>
   );
 }

@@ -103,7 +103,7 @@ def score(s: Segment) -> int:
         s.emotion_score, 0.9 if _EXCITEMENT.search(s.text) else s.emotion_score
     )
     q_bonus = 0.05 if "?" in s.text else 0.0
-    return round(
+    return max(0, min(100, round(
         100
         * (
             hook * 0.24
@@ -115,7 +115,7 @@ def score(s: Segment) -> int:
             + ending * 0.10
             + q_bonus
         )
-    )
+    )))
 
 
 def enrich(segments: Iterable[Segment]) -> list[Segment]:
@@ -146,7 +146,7 @@ def find_highlights(
     dedupe_threshold=0.35,
     platform: str = "",
 ):
-    items = enrich(list(segments))
+    items = enrich(sorted(segments, key=lambda segment: segment.start))
     candidates: list[tuple[int, Segment]] = []
     n = len(items)
     for i, s in enumerate(items):
@@ -159,7 +159,7 @@ def find_highlights(
             texts.append(items[j].text.strip())
             end = items[j].end
             j += 1
-        if not (min_seconds <= end - s.start <= max_seconds * 1.5):
+        if not (min_seconds <= end - s.start <= max_seconds):
             continue
         merged = replace(s, end=end, text=" ".join(t for t in texts if t))
         candidates.append((score(merged), merged))

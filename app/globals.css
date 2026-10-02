@@ -251,3 +251,151 @@ footer{
 .socialHead{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;font-size:11px;color:#a3b07a;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
 .socialTabs{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 8px}
 .socialCap pre{margin:0;white-space:pre-wrap;color:#e8f0d8;font-size:12px;line-height:1.45;font-family:ui-sans-serif,system-ui,sans-serif}
+
+/* Studio v1: diagnostics, recoverable jobs and project workspaces. */
+a.brand{text-decoration:none;color:var(--text)}
+a.chip,a.tab{text-decoration:none}
+button:disabled{opacity:.5;cursor:not-allowed}
+button:focus-visible,a:focus-visible,summary:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible,[role=button]:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+input[type=checkbox],input[type=range]{accent-color:var(--accent)}
+input::placeholder,textarea::placeholder{color:#687184}
+select{background:#0a0c10;border:1px solid var(--line);border-radius:8px;color:var(--text);padding:6px 8px;font:inherit;font-size:12px}
+.siteNav{gap:20px}
+.navLinks{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.workerPanel{display:flex;gap:8px;align-items:flex-start;border:1px solid var(--line);background:rgba(14,16,20,.8);border-radius:12px;padding:10px 12px;margin-bottom:32px;text-align:left}
+.workerPanel details{flex:1;min-width:0}
+.workerPanel summary{list-style:none;display:flex;gap:9px;align-items:center;cursor:pointer;font-size:12px;min-height:26px}
+.workerPanel summary::-webkit-details-marker{display:none}
+.workerPanel summary>svg{margin-left:auto;color:var(--muted)}
+.healthDot{width:7px;height:7px;border-radius:50%;background:#d19a53;flex:none}
+.healthDot.healthy{background:var(--ok);box-shadow:0 0 10px #6ee7a833}
+.healthSummary{color:var(--muted);font-size:11px}
+.healthDetails{padding:12px 0 0;border-top:1px solid var(--line);margin-top:10px;font-size:12px;color:var(--muted);line-height:1.6}
+.healthDetails p{margin:5px 0}
+.diagnosticGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.diagnosticGrid span{display:flex;flex-direction:column}
+.diagnosticGrid b{font-weight:600;color:var(--text);margin-top:3px}
+.workflow{display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;margin:26px 0 14px;color:#727d8d;font-size:11px;font-weight:700;letter-spacing:.03em}
+.workflow span{padding:6px 13px;border:1px solid var(--line);border-radius:6px;background:var(--panel)}
+.workflow .on{color:var(--accent);border-color:#334323;background:#11190b}
+.sourceInput textarea{flex:1;min-width:0;color:var(--text);background:transparent;border:0;resize:vertical;font:inherit;font-size:14px;line-height:1.5;outline:none;min-height:48px;padding:6px 0}
+.sourceInput button{flex:none}
+.inputHelp{font-size:11px;color:var(--muted);line-height:1.6;margin:8px 0 4px}
+.dropzone.disabled{cursor:not-allowed;opacity:.65}
+.sidecarFields{display:grid;grid-template-columns:1fr 1fr;gap:12px;text-align:left;margin-top:12px}
+.sidecarFields label{background:#0a0c10;padding:12px;border:1px solid var(--line);border-radius:10px;font-size:12px;color:var(--text);min-width:0}
+.sidecarFields small{display:block;color:var(--muted);margin:4px 0 9px;font-size:11px}
+.sidecarFields input{width:100%;color:var(--muted);font-size:11px}
+input::file-selector-button{background:#1a2214;border:1px solid #334323;border-radius:6px;padding:5px 8px;color:var(--accent);margin-right:8px;cursor:pointer;font:inherit}
+.analysisControls{text-align:left;border-top:1px solid var(--line);margin-top:12px;padding-top:12px;color:var(--muted);font-size:12px}
+.analysisControls summary{cursor:pointer;font-weight:600}
+.analysisControls summary span{font-size:11px;font-weight:400;float:right}
+.analysisFields{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:12px}
+.analysisFields label,.projectFields label,.projectWorkspace label{font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:6px}
+.analysisFields input,.projectFields input,.projectFields textarea,.projectWorkspace input,.jobFilters input{width:100%;color:var(--text);border:1px solid var(--line);background:#0a0c10;border-radius:8px;padding:9px 11px;font:inherit;font-size:13px;min-width:0}
+.projectFields textarea{resize:vertical}
+.warning{font-size:12px;color:#e2b97b;background:#21190d;border:1px solid #403019;border-radius:8px;padding:10px 12px;line-height:1.6;margin:10px 0;text-align:left}
+.error{line-height:1.6;padding:10px 12px;text-align:left;overflow-wrap:anywhere}
+.error .chip{margin-left:10px}
+.note{line-height:1.6;overflow-wrap:anywhere}
+.progressActions{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:8px;text-align:left}
+.progressActions small{font-size:11px;color:var(--muted)}
+.chip.danger{color:#ffaaa0;border-color:#5a312b}
+.timingHint{font-size:11px;color:var(--muted);line-height:1.6}
+.renderRow{display:flex;justify-content:space-between;gap:12px}
+.renderRow small{flex:1}
+.renderRow .renderBtn{flex:none}
+.exportSettings{background:#0b0e11;border:1px solid var(--line);border-radius:12px;padding:0 12px;margin:16px 0 4px}
+.exportSettings .toolbar:last-of-type{border-bottom:0}
+.pickerActions{padding:12px 0}
+.transcriptExports{padding:8px 0}
+.projectSave{margin:24px 0;border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:20px;display:grid;grid-template-columns:1fr 1.5fr;gap:24px}
+.projectSave h3{font-size:21px;margin:8px 0;letter-spacing:-.02em}
+.projectSave p{font-size:12px;color:var(--muted);line-height:1.7;margin:8px 0}
+.projectFields{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start}
+.projectFields .wide{grid-column:1/-1}
+.projectFields>a{justify-self:start;align-self:center}
+.generatedResults{margin-top:36px}
+.genActions{flex-wrap:wrap}
+.pageHeader{margin-bottom:26px;max-width:720px}
+.pageHeader h1{font-size:clamp(32px,5vw,48px);letter-spacing:-.04em;line-height:1.1;margin:12px 0}
+.pageHeader p{font-size:14px;color:var(--muted);line-height:1.7;margin:0}
+.jobStats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:10px}
+.jobStats>div{padding:20px;border:1px solid var(--line);background:var(--panel);border-radius:12px;display:flex;flex-direction:column;gap:6px}
+.jobStats b{font-size:28px;font-weight:750;letter-spacing:-.04em;color:var(--accent)}
+.jobStats span{font-size:12px;color:var(--muted)}
+.jobFilters{border-bottom:0;margin-bottom:10px}
+.jobFilters input{flex:1;min-width:180px}
+.jobCards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.jobCard{border:1px solid var(--line);background:var(--panel);border-radius:14px;padding:18px;min-width:0}
+.jobCardHead{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.jobCardHead>div{min-width:0;flex:1}
+.jobCard h3{font-size:14px;line-height:1.5;word-break:break-word;margin:7px 0}
+.jobCard small{font-size:11px;color:var(--muted);line-height:1.6}
+.jobBadge{font-size:10px;font-weight:700;padding:5px 8px;border-radius:6px;background:#1a1e27;color:var(--muted);border:1px solid #2c3340;flex:none;text-transform:capitalize}
+.jobBadge.processing,.jobBadge.queued,.jobBadge.preparing{color:var(--accent);border-color:#334323;background:#141e0c}
+.jobBadge.completed{color:var(--ok);border-color:#254a37;background:#0c1c14}
+.jobBadge.failed{color:var(--danger);border-color:#512d2d;background:#210f0f}
+.jobBadge.cancelling{color:#e2b97b;border-color:#403019;background:#21190d}
+.jobStage{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:18px 0 8px;font-size:11px;color:var(--muted)}
+.jobStage b{color:var(--text)}
+.miniProgress{height:4px;background:#1b2028;border-radius:4px;overflow:hidden}
+.miniProgress i{display:block;background:var(--accent);height:100%;transition:width .3s}
+.jobError{font-size:11px;color:#ffaaa0;line-height:1.6;overflow-wrap:anywhere;background:#211211;border-radius:6px;padding:8px}
+.jobCardActions{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:16px}
+.jobCardActions .chip{font-size:11px;padding:6px 8px}
+.jobCardActions small{margin-left:auto}
+.emptyState{border:1px dashed #303843;border-radius:16px;padding:44px 22px;text-align:center;margin:20px 0;color:var(--muted)}
+.emptyState h3,.emptyState h1{color:var(--text);letter-spacing:-.025em}
+.emptyState p{font-size:13px;line-height:1.7;margin-bottom:20px}
+.emptyState>svg{color:var(--accent)}
+.emptyState .historyActions{justify-content:center}
+.projectWorkspace{display:flex;gap:14px;align-items:flex-end;padding:16px;border-radius:12px;background:var(--panel);border:1px solid var(--line);margin-bottom:14px}
+.projectWorkspace label{width:240px;flex:none}
+.projectWorkspace p{margin:0;font-size:11px;line-height:1.7;color:var(--muted)}
+.projectCreate{border:1px solid var(--line);border-radius:12px;padding:14px 16px;background:#0a0c10;margin-bottom:20px}
+.projectCreate summary{font-size:12px;cursor:pointer;color:var(--muted);font-weight:600}
+.projectCreate .projectFields{margin-top:16px}
+.projectGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-top:20px}
+.projectCard{padding:20px;background:var(--panel);border:1px solid var(--line);border-radius:14px;min-width:0}
+.projectCard h2{font-size:20px;letter-spacing:-.02em;margin:12px 0;overflow-wrap:anywhere}
+.projectCard p{font-size:12px;line-height:1.7;color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere}
+.projectCard small{font-size:11px;color:var(--muted);line-height:1.8}
+.projectCardActions{display:flex;gap:6px;flex-wrap:wrap;margin-top:20px;align-items:center}
+.historyList>li>div:first-child{min-width:0}
+.historyList b{overflow-wrap:anywhere}
+.historyActions{flex-wrap:wrap}
+@media(max-width:900px){.projectGrid{grid-template-columns:repeat(2,minmax(0,1fr))}.projectSave{grid-template-columns:1fr;gap:12px}.projectWorkspace{flex-wrap:wrap}.projectWorkspace p{flex-basis:100%}}
+@media(max-width:720px){
+  .siteNav{align-items:flex-start;flex-wrap:wrap;padding-bottom:22px;gap:15px}
+  .navLinks .tab{padding:7px 10px;font-size:11px}
+  .workerPanel{margin-bottom:26px;padding:9px 10px}
+  .healthSummary{display:none}
+  .diagnosticGrid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .workflow{gap:5px;margin-top:22px}
+  .workflow span{font-size:10px;padding:6px 9px}
+  .sourceInput textarea{min-width:calc(100% - 35px)}
+  .sourceInput button{justify-content:center}
+  .sidecarFields{grid-template-columns:1fr}
+  .analysisFields{gap:8px}
+  .analysisFields label{font-size:10px}
+  .analysisFields input{padding:8px;font-size:12px}
+  .analysisControls summary span{font-size:10px}
+  .features{gap:8px;margin-bottom:24px}
+  .features div{padding:14px}
+  .features b{margin-top:6px}
+  .resultHead{align-items:flex-start;gap:12px;flex-wrap:wrap}
+  .resultHead h2{font-size:23px}
+  .renderRow{flex-direction:column;align-items:stretch}
+  .renderRow .renderBtn{justify-content:center}
+  .projectSave{padding:16px}
+  .projectFields{grid-template-columns:1fr}
+  .projectFields .wide{grid-column:auto}
+  .jobStats{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  .jobStats>div{padding:16px}
+  .jobCards,.projectGrid{grid-template-columns:1fr}
+  .projectWorkspace label{width:auto;flex:1;min-width:160px}
+  .projectWorkspace{padding:14px}
+  .genClip video{max-height:420px}
+}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}

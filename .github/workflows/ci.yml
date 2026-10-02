@@ -11,8 +11,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm install
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm audit --omit=dev
       - run: npm run build
+      - name: Browser regression suite
+        run: |
+          npx playwright install --with-deps chromium
+          npm run test:e2e
 
   worker:
     runs-on: ubuntu-latest
@@ -21,21 +30,20 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install --upgrade pip
+      - name: Install media tools and caption fonts
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-noto-core
+      - run: python -m pip install --upgrade "pip>=26.2.1" "setuptools>=84.0.0"
       - run: pip install -r worker/requirements.txt
-      - name: Pytest unit suite
+      - name: Python dependency security audit
         run: |
-          cd worker
-          PYTHONPATH=. python -m pytest test_highlights.py test_jobs.py test_captions.py test_social.py test_webhook.py -q
-      - name: Import worker
+          pip install pip-audit
+          pip-audit
+      - name: Unit, API and real media integration suites
+        run: PYTHONPATH=worker python -m pytest worker -q
+      - name: Import and compile worker
         run: |
           PYTHONPATH=worker python -c "import main; assert main.VERSION; print('worker', main.VERSION)"
-      - name: Compile all
-        run: PYTHONPATH=worker python -m compileall -q worker
-      - name: Pytest API suite
-        run: |
-          cd worker
-          PYTHONPATH=. python -m pytest test_worker_api.py -q
+          PYTHONPATH=worker python -m compileall -q worker
 
   worker-image:
     runs-on: ubuntu-latest

@@ -2,50 +2,9 @@
 
 import time
 
-import pytest
 from fastapi.testclient import TestClient
 
 
-@pytest.fixture()
-def client(tmp_path, monkeypatch):
-    """Isolated worker app bound to a temp data dir + auth token."""
-    monkeypatch.setenv("CLIPFORGE_DATA", str(tmp_path / "data"))
-    monkeypatch.setenv("WORKER_API_TOKEN", "secret-token")
-    monkeypatch.setenv("CLIPFORGE_RATE_LIMIT", "100")
-
-    import config
-
-    fresh_settings = config.Settings()
-    monkeypatch.setattr(config, "settings", fresh_settings)
-
-    import main as worker_main
-    from jobs import JobStore
-
-    monkeypatch.setattr(worker_main, "settings", fresh_settings)
-
-    fresh = JobStore(
-        fresh_settings.data_dir,
-        concurrency=1,
-        max_attempts=2,
-        ttl_hours=1.0,
-        max_total_gb=1.0,
-    )
-    fresh.register_handler("analyze", worker_main.pipeline.handle_analyze)
-    fresh.register_handler("render", worker_main.pipeline.handle_render)
-    monkeypatch.setattr(worker_main, "store", fresh)
-
-    root = worker_main.app
-    seen = set()
-    while getattr(root, "app", None) is not None and id(root) not in seen:
-        seen.add(id(root))
-        root = root.app
-    if hasattr(root, "_clipforge_rate_hits"):
-        root._clipforge_rate_hits.clear()
-
-    with TestClient(worker_main.app) as c:
-        c.headers.update({"Authorization": "Bearer secret-token"})
-        yield c
-    fresh.shutdown()
 
 
 def test_health_is_public(client):
@@ -136,7 +95,17 @@ def test_retry_endpoint(client):
 def test_delete_and_cleanup(client):
     r = client.post("/jobs/youtube", json={"url": "https://youtu.be/del1"})
     job_id = r.json()["job_id"]
-    assert client.delete(f"/jobs/{job_id}").status_code == 200
+    # Active inputs are protected: cancellation must finish before deletion.
+    status = client.get(f"/jobs/{job_id}").json()["status"]
+    if status in ("queued", "processing"):
+        client.post(f"/jobs/{job_id}/cancel")
+    for _ in range(50):
+        deleted = client.delete(f"/jobs/{job_id}")
+        if deleted.status_code == 200:
+            break
+        assert deleted.status_code == 409
+        time.sleep(0.02)
+    assert deleted.status_code == 200
     gone = False
     for _ in range(20):
         if client.get(f"/jobs/{job_id}").status_code == 404:
@@ -182,7 +151,7 @@ def test_zip_download_bundle(client, tmp_path):
 
     import main as worker_main
 
-    job = worker_main.store.create("render", {"durations": [30]})
+    job = worker_main.store.create("render", {"durations": [30]}, enqueue=False)
     job_id = job["id"]
     work = worker_main.media.safe_job_dir(worker_main._data_root(), job_id)
     clips = work / "clips"

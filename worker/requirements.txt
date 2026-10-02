@@ -1,10 +1,12 @@
-fastapi>=0.115.6,<0.120
-uvicorn[standard]>=0.34.0,<0.40
-python-multipart>=0.0.20
+fastapi>=0.142.2,<0.143
+starlette>=1.7.0,<2
+uvicorn[standard]>=0.54.0,<0.55
+python-multipart>=0.0.32,<0.1
+python-dotenv>=1.0,<2
 # 2.12+ ships pydantic-core with Python 3.14 / newer PyO3 (needed on Termux rolling Python)
 pydantic>=2.12.0,<3
 httpx>=0.28.1,<0.29
-pytest>=8.3.4,<9
+pytest>=9.1.1,<10
 # Optional ML (install separately on device with RAM to spare):
 # faster-whisper
 # openai-whisper

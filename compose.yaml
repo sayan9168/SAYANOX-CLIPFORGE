@@ -1,0 +1,42 @@
+services:
+  web:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      WORKER_API_URL: http://worker:8000
+      WORKER_API_TOKEN: ${WORKER_API_TOKEN:?Set a private WORKER_API_TOKEN in .env.local}
+      WORKER_REQUEST_TIMEOUT_SECONDS: ${WORKER_REQUEST_TIMEOUT_SECONDS:-30}
+      CLIPFORGE_MAX_UPLOAD_MB: ${CLIPFORGE_MAX_UPLOAD_MB:-2048}
+    depends_on:
+      worker:
+        condition: service_healthy
+    restart: unless-stopped
+  worker:
+    build: ./worker
+    environment:
+      WORKER_API_TOKEN: ${WORKER_API_TOKEN:?Set a private WORKER_API_TOKEN in .env.local}
+      CLIPFORGE_DATA: /data
+      HF_HOME: /data/models
+      WHISPER_MODEL: ${WHISPER_MODEL:-tiny}
+      WHISPER_DEVICE: cpu
+      WHISPER_COMPUTE_TYPE: int8
+      CLIPFORGE_ALLOW_YTDLP: ${CLIPFORGE_ALLOW_YTDLP:-false}
+      CLIPFORGE_MAX_UPLOAD_MB: ${CLIPFORGE_MAX_UPLOAD_MB:-2048}
+      CLIPFORGE_MAX_VIDEO_SECONDS: ${CLIPFORGE_MAX_VIDEO_SECONDS:-7200}
+      CLIPFORGE_WORKER_CONCURRENCY: ${CLIPFORGE_WORKER_CONCURRENCY:-1}
+      CLIPFORGE_MAX_PENDING_JOBS: ${CLIPFORGE_MAX_PENDING_JOBS:-100}
+      CLIPFORGE_FFMPEG_THREADS: ${CLIPFORGE_FFMPEG_THREADS:-2}
+      CLIPFORGE_JOB_TTL_HOURS: ${CLIPFORGE_JOB_TTL_HOURS:-24}
+      CLIPFORGE_MAX_STORAGE_GB: ${CLIPFORGE_MAX_STORAGE_GB:-50}
+    volumes:
+      - clipforge-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json,urllib.request; assert json.load(urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=5))['ready']"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+    restart: unless-stopped
+volumes:
+  clipforge-data:

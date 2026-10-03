@@ -1,11 +1,8 @@
-import { forward } from "../_worker";
+import { forward, jobId, proxyError } from "../_worker";
 export const runtime = "nodejs";
 
-/* GET /api/jobs/status?job=<id> -> worker GET /jobs/{id} (progress polling). */
 export async function GET(req: Request) {
-  const job = new URL(req.url).searchParams.get("job") || "";
-  if (!/^[A-Za-z0-9_-]{1,64}$/.test(job)) {
-    return Response.json({ error: "Invalid job id." }, { status: 400 });
-  }
-  return forward(req, `/jobs/${job}`);
+  try {
+    return forward(req, `/jobs/${jobId(req)}`, { method: "GET" });
+  } catch (error) { return proxyError(error); }
 }

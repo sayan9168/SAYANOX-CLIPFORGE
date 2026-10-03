@@ -1,171 +1,90 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
-import { Play } from "lucide-react";
+import { useRef, useState } from "react";
+import { Play, RotateCcw } from "lucide-react";
+import { formatTime } from "../../lib/storage";
+import type { Highlight, Trim } from "../../lib/types";
 import { SocialCaption } from "./SocialCaption";
 import { WaveformTimeline } from "./WaveformTimeline";
+export type { Highlight } from "../../lib/types";
 
-export type Highlight = {
-  start: number; end: number; score: number;
-  title?: string; reason?: string; text?: string;
-  caption?: string; hashtags?: string[]; hashtag_line?: string; post?: string;
-  packs?: Record<string, { post?: string }>;
-  languages?: Record<string, Record<string, { post?: string }>>;
-  signals?: Record<string, number | undefined>;
-};
-
-function fmt(s: number) {
-  const m = Math.floor(s / 60), sec = Math.round(s % 60);
-  return String(m).padStart(2, "0") + ":" + String(sec).padStart(2, "0");
-}
-
-function lastAnalyzeJob(): string {
-  try {
-    const live = sessionStorage.getItem("clipforge-analyze-job");
-    if (live) return live;
-    const raw = localStorage.getItem("clipforge-history-v1");
-    const items = raw ? JSON.parse(raw) as { id: string; kind: string }[] : [];
-    return items.find((h) => h.kind === "analyze" || h.kind === "upload")?.id || "";
-  } catch {
-    return "";
-  }
-}
-
-export function ClipPicker({
-  clips, selected, setSelected, trims, setTrims, platform, busy, jobId,
-}: {
-  clips: Highlight[];
-  selected: boolean[];
-  setSelected: (v: boolean[]) => void;
-  trims: { start: number; end: number }[];
-  setTrims: (v: { start: number; end: number }[]) => void;
-  platform: string;
-  busy: boolean;
-  jobId?: string;
+export function ClipPicker({ clips, selected, setSelected, trims, setTrims, platform, busy, jobId, sourceFile, duration, hasVideo = true }: {
+  clips: Highlight[]; selected: boolean[]; setSelected: (value: boolean[]) => void;
+  trims: Trim[]; setTrims: (value: Trim[]) => void; platform: string; busy: boolean;
+  jobId: string; sourceFile: string; duration: number; hasVideo?: boolean;
 }) {
   const [open, setOpen] = useState<number | null>(null);
-  const [resolvedJob, setResolvedJob] = useState(jobId || lastAnalyzeJob());
-  const vids = useRef<Record<number, HTMLVideoElement | null>>({});
-  const previewJob = jobId || resolvedJob;
-  const marks = clips.map((c, i) => ({
-    start: trims[i]?.start ?? c.start,
-    end: trims[i]?.end ?? c.end,
-  }));
-  const span = marks.reduce((m, x) => Math.max(m, x.end), 1);
-
-  useEffect(() => {
-    if (jobId) {
-      setResolvedJob(jobId);
-      try { sessionStorage.setItem("clipforge-analyze-job", jobId); } catch {}
-      return;
-    }
-    if (resolvedJob) return;
-    let cancelled = false;
-    fetch("/api/jobs/list", { cache: "no-store" })
-      .then((r) => r.json())
-      .then((d) => {
-        if (cancelled) return;
-        const jobs = (d.jobs || []) as { id: string; kind: string; status: string }[];
-        const hit = jobs.find((j) => j.kind === "analyze" && j.status === "completed") || jobs.find((j) => j.kind === "analyze");
-        if (hit?.id) {
-          setResolvedJob(hit.id);
-          try { sessionStorage.setItem("clipforge-analyze-job", hit.id); } catch {}
-        }
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [jobId, resolvedJob]);
-
-  function toggle(i: number) {
-    const next = selected.slice();
-    next[i] = !next[i];
-    setSelected(next);
-  }
-  function patch(i: number, field: "start" | "end", n: number) {
+  const [previewError, setPreviewError] = useState("");
+  const video = useRef<HTMLVideoElement | null>(null);
+  const marks = clips.map((clip, index) => trims[index] || { start: clip.start, end: clip.end });
+  const maximum = duration || marks.reduce((value, mark) => Math.max(value, mark.end), 1);
+  function patch(index: number, field: "start" | "end", n: number) {
     if (!Number.isFinite(n)) return;
-    const next = trims.map((t) => ({ ...t }));
-    next[i] = { ...next[i], [field]: Math.max(0, n) };
-    if (next[i].end <= next[i].start) next[i].end = next[i].start + 1;
+    const next = marks.map((trim) => ({ ...trim }));
+    const trim = next[index];
+    if (field === "start") {
+      trim.start = Math.max(0, Math.min(maximum - 0.1, n));
+      trim.end = Math.min(maximum, Math.max(trim.end, trim.start + 0.1));
+      if (trim.end - trim.start > 180) trim.end = trim.start + 180;
+    } else {
+      trim.end = Math.max(0.1, Math.min(maximum, n));
+      trim.start = Math.max(0, Math.min(trim.start, trim.end - 0.1));
+      if (trim.end - trim.start > 180) trim.start = trim.end - 180;
+    }
     setTrims(next);
   }
-  function playPreview(i: number) {
-    setOpen(i);
-    const el = vids.current[i];
-    const t = trims[i]?.start ?? clips[i].start;
-    if (el) {
-      el.currentTime = Math.max(0, t);
-      el.play().catch(() => {});
-    }
+  function preview(index: number) {
+    setPreviewError("");
+    if (open === index && video.current) {
+      video.current.currentTime = marks[index].start;
+      void video.current.play().catch(() => setPreviewError("Press the video play button to start preview."));
+    } else setOpen(index);
   }
-  return (
-    <>
-      <WaveformTimeline jobId={previewJob} duration={span} marks={marks} />
-      {clips.map((c, i) => {
-        const t0 = trims[i]?.start ?? c.start;
-        const t1 = trims[i]?.end ?? c.end;
-        const rail0 = Math.max(0, Math.min(c.start, t0) - 8);
-        const rail1 = Math.max(c.end, t1) + 8;
-        const railSpan = Math.max(1, rail1 - rail0);
-        const left = ((t0 - rail0) / railSpan) * 100;
-        const width = ((t1 - t0) / railSpan) * 100;
-        return (
-          <article className={`clip${selected[i] === false ? " dim" : ""}`} key={i}>
-            <div className="thumb">
-              <Play size={22} />
-              <small>{fmt(t0)} — {fmt(t1)}</small>
+  return <>
+    <div className="toolbar pickerActions">
+      <button type="button" className="chip" disabled={busy} onClick={() => setSelected(clips.map(() => true))}>Select all</button>
+      <button type="button" className="chip" disabled={busy} onClick={() => setSelected(clips.map(() => false))}>Select none</button>
+      <button type="button" className="chip" disabled={busy} onClick={() => setTrims(clips.map((clip) => ({ start: clip.start, end: clip.end })))}><RotateCcw size={12} /> Reset trims</button>
+    </div>
+    <WaveformTimeline jobId={jobId} duration={maximum} marks={marks} />
+    {clips.map((clip, index) => {
+      const { start, end } = marks[index];
+      const low = Math.max(0, Math.min(clip.start, start) - 8);
+      const high = Math.min(maximum, Math.max(clip.end, end) + 8);
+      const span = Math.max(0.1, high - low);
+      return <article className={`clip${selected[index] === false ? " dim" : ""}`} key={`${jobId}-${index}`}>
+        <div className="thumb"><Play size={22} /><small>{formatTime(start)} — {formatTime(end)}</small></div>
+        <div className="clipBody">
+          <div className="clipTitle"><label className="pickLabel">
+            <input type="checkbox" checked={selected[index] !== false} disabled={busy} onChange={() => setSelected(selected.map((value, i) => i === index ? !value : value))} aria-label={`Select clip ${index + 1}`} />
+            <h3>{clip.title || `Highlight #${index + 1}`}</h3>
+          </label><strong>{Math.round(clip.score)}/100</strong></div>
+          <p>{clip.reason || clip.text || ""}</p>
+          <div className="timeline">
+            <div className="rail"><i style={{ left: `${(start - low) / span * 100}%`, width: `${(end - start) / span * 100}%` }} /></div>
+            <div className="trimRow">
+              <span>In</span><input aria-label={`Clip ${index + 1} in slider`} type="range" min={low} max={high} step={0.1} disabled={busy} value={start} onChange={(event) => patch(index, "start", Number(event.target.value))} />
+              <input aria-label={`Clip ${index + 1} in seconds`} type="number" step={0.1} min={0} max={maximum} disabled={busy} value={Number(start.toFixed(1))} onChange={(event) => patch(index, "start", Number(event.target.value))} />
+              <span>Out</span><input aria-label={`Clip ${index + 1} out slider`} type="range" min={low} max={high} step={0.1} disabled={busy} value={end} onChange={(event) => patch(index, "end", Number(event.target.value))} />
+              <input aria-label={`Clip ${index + 1} out seconds`} type="number" step={0.1} min={0.1} max={maximum} disabled={busy} value={Number(end.toFixed(1))} onChange={(event) => patch(index, "end", Number(event.target.value))} />
+              <code>{(end - start).toFixed(1)}s</code>
             </div>
-            <div className="clipBody">
-              <div className="clipTitle">
-                <label className="pickLabel">
-                  <input type="checkbox" checked={selected[i] !== false} disabled={busy} onChange={() => toggle(i)} />
-                  <h3>{c.title || `Highlight #${i + 1}`}</h3>
-                </label>
-                <strong>{Math.round(c.score)}/100</strong>
-              </div>
-              <p>{c.reason || c.text || ""}</p>
-              <div className="timeline">
-                <div className="rail"><i style={{ left: `${left}%`, width: `${width}%` }} /></div>
-                <div className="trimRow">
-                  <span>In</span>
-                  <input type="range" min={rail0} max={rail1} step={0.1} disabled={busy}
-                    value={t0} onChange={(e) => patch(i, "start", Number(e.target.value))} />
-                  <input type="number" step={0.1} min={0} disabled={busy} value={Number(t0.toFixed(1))}
-                    onChange={(e) => patch(i, "start", Number(e.target.value))} />
-                  <span>Out</span>
-                  <input type="range" min={rail0} max={rail1} step={0.1} disabled={busy}
-                    value={t1} onChange={(e) => patch(i, "end", Number(e.target.value))} />
-                  <input type="number" step={0.1} min={0} disabled={busy} value={Number(t1.toFixed(1))}
-                    onChange={(e) => patch(i, "end", Number(e.target.value))} />
-                  <code>{fmt(t1 - t0)}</code>
-                </div>
-              </div>
-              {previewJob && (
-                <div className="previewBox">
-                  <button type="button" className="chip" disabled={busy} onClick={() => playPreview(i)}>Preview trim</button>
-                  {open === i && (
-                    <video
-                      ref={(el) => { vids.current[i] = el; }}
-                      src={`/api/jobs/files?job=${previewJob}&path=${encodeURIComponent("source.mp4")}`}
-                      controls
-                      onLoadedMetadata={(e) => { e.currentTarget.currentTime = t0; }}
-                      onTimeUpdate={(e) => {
-                        if (e.currentTarget.currentTime >= t1) e.currentTarget.pause();
-                      }}
-                    />
-                  )}
-                </div>
-              )}
-              {c.signals && (
-                <div className="signals">
-                  {Object.entries(c.signals).map(([k, v]) =>
-                    v != null ? <span className="sig" key={k}>{k}<strong>{Math.round(Number(v) * 100)}</strong></span> : null,
-                  )}
-                </div>
-              )}
-              <SocialCaption pack={c} packs={c.packs} languages={c.languages} title={c.title} text={c.text} platform={platform} />
-            </div>
-          </article>
-        );
-      })}
-    </>
-  );
+          </div>
+          {jobId && sourceFile && hasVideo && <div className="previewBox">
+            <button type="button" className="chip" onClick={() => preview(index)}><Play size={12} /> Preview trim</button>
+            {open === index && <>
+              <video ref={video} controls playsInline preload="metadata"
+                src={`/api/jobs/files?job=${jobId}&path=${encodeURIComponent(sourceFile)}`}
+                onLoadedMetadata={(event) => { event.currentTarget.currentTime = start; void event.currentTarget.play().catch(() => {}); }}
+                onTimeUpdate={(event) => { if (event.currentTarget.currentTime >= end) event.currentTarget.pause(); }}
+                onError={() => setPreviewError("This source codec cannot play in your browser. Render an MP4 clip to preview it.")} />
+              {previewError && <small className="warning">{previewError}</small>}
+            </>}
+          </div>}
+          {clip.signals && <div className="signals">{Object.entries(clip.signals).map(([key, value]) =>
+            value != null ? <span className="sig" key={key}>{key}<strong>{Math.round(value * 100)}</strong></span> : null)}</div>}
+          <SocialCaption pack={clip} packs={clip.packs} languages={clip.languages} title={clip.title} text={clip.text} platform={platform} />
+        </div>
+      </article>;
+    })}
+  </>;
 }

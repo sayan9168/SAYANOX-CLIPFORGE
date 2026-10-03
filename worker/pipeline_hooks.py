@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import media
+from execution import check_cancelled
 
 
 def window_for(highlight: dict, durations: list[int], duration: float, pad: float) -> tuple[float, float, int]:
@@ -36,5 +37,6 @@ def grab_thumbnail(src: Path, dest: Path, t: float) -> Path | None:
             timeout=60,
         )
     except Exception:
+        check_cancelled()
         return None
     return dest if dest.is_file() else None

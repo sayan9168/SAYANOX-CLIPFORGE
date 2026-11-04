@@ -6,6 +6,7 @@ A local-first video clipping studio: Next.js web UI + a separate FastAPI/FFmpeg 
 
 - **Recoverable workflow:** browser draft/preset autosave, reopen jobs, sequential polling with reconnect/backoff, safe cancel and kind-aware retry.
 - **Advanced analysis:** choose 5–180 second windows and up to 20 highlights; submit up to 5 authorized YouTube videos per batch.
+- **Multilingual highlight ranking:** Bengali and Hindi hook phrases, excitement cues, question marks and Bengali sentence endings improve candidate ranking for regional facts channels.
 - **Precise exports:** exact trims or smart target lengths; 9:16, 1:1 and 16:9; explicit color grade and a first-two-second hook zoom.
 - **Real subtitles:** attach an SRT before uploading, or use Whisper. Download full transcripts as SRT/VTT/TXT/JSON and per-clip SRT/VTT. VTT can also play as an optional caption track.
 - **Background audio:** upload a track, control its volume and duck it under speech; otherwise use a synthesized soft tone bed.
@@ -63,6 +64,11 @@ Language tabs localize social calls-to-action. They do not automatically transla
 - [TERMUX.md](TERMUX.md): lightweight Android setup.
 
 **Important:** a worker token protects the worker, not public web users. Put authentication/access control in front of the web application before sharing a private deployment. Projects retain metadata; job media still expires according to retention settings. Back up exports and the persistent worker volume.
+
+
+## Copyright and publishing safety
+
+ClipForge is an editing tool, not a copyright-removal or Content ID bypass tool. Cropping, mirroring, changing speed/pitch, adding captions or adding music does not grant rights to someone else's footage. Only upload media you created, licensed, or are otherwise authorized to use; keep licence and attribution records where required. YouTube may still issue a Content ID claim or review a video under its reused-content monetization policies. The app cannot guarantee that an export is claim-free or monetizable.
 
 ## Checks
 

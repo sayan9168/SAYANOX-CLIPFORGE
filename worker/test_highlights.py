@@ -41,3 +41,25 @@ def test_build_segments_fuses_audio_and_scene_signals():
     assert segs[0].audio_score > segs[1].audio_score
     assert segs[0].visual_score > segs[1].visual_score
     assert segs[1].speech_score < 0.2               # silence detected
+
+
+def test_bengali_facts_hooks_are_ranked_above_generic_phrasing():
+    assert hook_strength("জানেন কি, মহাকাশে কীভাবে ব্ল্যাক হোল তৈরি হয়?") > hook_strength(
+        "আজ আমরা একটি সাধারণ বিষয় নিয়ে কথা বলব"
+    )
+
+
+def test_bengali_emotion_and_sentence_endings_are_recognized():
+    from highlights import _make_title, score
+
+    exciting = Segment(0, 20, "অবিশ্বাস্য! এই রহস্যের সত্যিটা হলো।", .8, .4, .5, .5)
+    plain = Segment(0, 20, "এই বিষয়ে কিছু কথা বলা যাক", .8, .4, .5, .5)
+    assert score(exciting) > score(plain)
+    assert "complete thought" in find_highlights([exciting], 15, 30, 1)[0]["reason"]
+    assert _make_title("সমুদ্রের রহস্য। আরও একটি বাক্য", 80) == "সমুদ্রের রহস্য।"
+
+
+def test_hindi_hook_detection_supports_question_openers():
+    assert hook_strength("क्या आप जानते हैं कि यह कैसे होता है?") > hook_strength(
+        "आज हम एक सामान्य विषय पर बात करेंगे"
+    )

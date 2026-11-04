@@ -23,7 +23,9 @@ HOOK_PATTERNS = [
 ]
 
 _EXCITEMENT = re.compile(
-    r"[!?]|amazing|insane|unbelievable|huge|incredible|crazy|wow|shocking|powerful",
+    r"[!?？]|amazing|insane|unbelievable|huge|incredible|crazy|wow|shocking|powerful"
+    r"|অবিশ্বাস্য|চমকে|রহস্য|ভয়ংকর|দুর্দান্ত|অসাধারণ|ভাবতেই পারবেন না"
+    r"|हैरान|अविश्वसनीय|शानदार|खतरनाक",
     re.I,
 )
 
@@ -65,7 +67,8 @@ def _make_title(text: str, score_val: int) -> str:
         return f"Highlight ({score_val})"
     parts = re.split(r"(?<=[.!?])\s+", cleaned)
     candidate = parts[0] if parts else cleaned
-    candidate = TITLE_STOP.sub("", candidate).strip(" ,;:-")
+    candidate = TITLE_STOP.sub("", candidate)
+    candidate = BENGALI_TITLE_STOP.sub("", candidate).strip(" ,;:-।")
     words = candidate.split()
     if len(words) > 10:
         candidate = " ".join(words[:10]) + "…"
@@ -87,7 +90,7 @@ def _make_reason(seg: Segment, value: int) -> str:
         bits.append("audio peak")
     if seg.visual_score >= 0.55:
         bits.append("visual cuts")
-    if seg.text.rstrip().endswith((".", "!", "?")):
+    if seg.text.rstrip().endswith(_SENTENCE_END):
         bits.append("complete thought")
     if not bits:
         bits.append("balanced signals")
@@ -97,12 +100,12 @@ def _make_reason(seg: Segment, value: int) -> str:
 def score(s: Segment) -> int:
     duration = max(0.5, s.end - s.start)
     density = min(1.0, len(s.text.strip()) / (duration * 4.0))
-    ending = 1.0 if s.text.rstrip().endswith((".", "!", "?")) else 0.45
+    ending = 1.0 if s.text.rstrip().endswith(_SENTENCE_END) else 0.45
     hook = s.hook_score if s.hook_score is not None else hook_strength(s.text)
     emotion = max(
         s.emotion_score, 0.9 if _EXCITEMENT.search(s.text) else s.emotion_score
     )
-    q_bonus = 0.05 if "?" in s.text else 0.0
+    q_bonus = 0.05 if any(mark in s.text for mark in _QUESTION_MARKS) else 0.0
     return max(0, min(100, round(
         100
         * (

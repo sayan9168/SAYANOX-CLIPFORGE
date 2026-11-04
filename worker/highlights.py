@@ -20,6 +20,13 @@ HOOK_PATTERNS = [
     r"\b(i learned|i discovered|the result|finally|turns out)\b",
     r"\b(what if|imagine if|think about|let me tell you)\b",
     r"\b(game.?changer|mind.?blowing|life.?changing|never.?before)\b",
+    # Bengali and Hindi hooks for multilingual facts channels.
+    r"(জানেন কি|জানো কি|কখনও ভেবেছেন|ভাবুন তো|কেউ বলে না|সত্যিটা হলো|আসল ঘটনা|অবিশ্বাস্য)",
+    r"(কেন|কীভাবে|কী হয়|কি হয়|কীভাবে হয়).*[?？]",
+    r"(মাত্র \d+|\d+টি? (কারণ|তথ্য|রহস্য|উপায়)|প্রথমবার|শেষ পর্যন্ত)",
+    r"(রহস্য|চমকে যাবেন|বিশ্বাস করবেন না|ভুল ধারণা|সবচেয়ে বড়)",
+    r"(क्या आप जानते हैं|क्या आपने कभी सोचा|असली सच|हैरान कर देगा|किसी ने नहीं बताया)",
+    r"(क्यों|कैसे).*[?？]",
 ]
 
 _EXCITEMENT = re.compile(
@@ -32,6 +39,9 @@ _EXCITEMENT = re.compile(
 TITLE_STOP = re.compile(
     r"^(so|and|but|well|okay|ok|um|uh|like|you know|basically)\b", re.I
 )
+BENGALI_TITLE_STOP = re.compile(r"^(তো|মানে|আচ্ছা|হ্যাঁ|এবং|কিন্তু)\s*")
+_SENTENCE_END = (".", "!", "?", "।", "॥", "؟")
+_QUESTION_MARKS = ("?", "？", "؟")
 
 
 @dataclass(frozen=True)
@@ -65,7 +75,7 @@ def _make_title(text: str, score_val: int) -> str:
     cleaned = " ".join(text.split())
     if not cleaned:
         return f"Highlight ({score_val})"
-    parts = re.split(r"(?<=[.!?])\s+", cleaned)
+    parts = re.split(r"(?<=[.!?।॥؟])\s+", cleaned)
     candidate = parts[0] if parts else cleaned
     candidate = TITLE_STOP.sub("", candidate)
     candidate = BENGALI_TITLE_STOP.sub("", candidate).strip(" ,;:-।")

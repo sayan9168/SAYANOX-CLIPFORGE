@@ -1,7 +1,7 @@
-"""Highlight detection engine (v0.8).
+"""Multilingual highlight detection for short-form video clipping.
 
-Combines transcript signals with media signals and attaches English
-social caption packs for YouTube, Instagram and TikTok.
+Combines transcript and media signals; supports English, Bengali and Hindi
+hook/sentence heuristics. Social caption packs remain generated separately.
 """
 from __future__ import annotations
 
